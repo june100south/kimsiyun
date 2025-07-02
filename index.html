@@ -10,13 +10,22 @@
     <script type="module">
         // Firebase 앱 및 Firestore 관련 모듈 가져오기
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"; // signInWithCustomToken 제거
         import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Canvas 환경에서 제공되는 전역 변수들
+        // Canvas 환경에서 제공되는 전역 변수들 (initialAuthToken은 더 이상 사용하지 않음)
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const firebaseConfig = {
+            // 사용자님이 제공해주신 API 키로 설정
+            apiKey: "AIzaSyDHsuHUmGXe-qLSzVBR6Npy8SmMQ8bJB0o",
+            authDomain: "swai2-e63e9.firebaseapp.com",
+            projectId: "swai2-e63e9",
+            storageBucket: "swai2-e63e9.firebasestorage.app",
+            messagingSenderId: "137618516147",
+            appId: "1:137618516147:web:bff3d64b0a63052c3da8c6",
+            measurementId: "G-SJ263PTXNZ" // 애널리틱스 사용 안하면 이 줄도 삭제 가능
+        };
+        // const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // 더 이상 사용하지 않음
 
         // Firebase 및 Firestore 인스턴스 변수 (모듈 스코프 최상단에 선언)
         let app;
@@ -33,12 +42,8 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 사용자 인증 (초기 토큰이 있으면 사용, 없으면 익명 로그인)
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // 사용자 인증: 익명으로만 로그인 시도 (custom-token-mismatch 오류 방지)
+                await signInAnonymously(auth);
 
                 // 인증 상태 변화 감지 및 모든 앱 로직 시작
                 onAuthStateChanged(auth, (user) => {
@@ -46,15 +51,10 @@
                         currentUserId = user.uid;
                     } else {
                         // 사용자가 없을 경우 익명 ID 생성 (다중 사용자 앱이므로 고유 ID 필요)
+                        // 이 부분은 signInAnonymously가 실패할 경우를 대비하지만, 위에서 이미 시도했으므로 거의 발생하지 않음
                         currentUserId = crypto.randomUUID();
                     }
                     console.log("Firebase initialized and user authenticated:", currentUserId);
-
-                    // 사용자 ID를 UI에 표시하는 코드 제거됨 (익명 사용이므로 UI에 표시하지 않음)
-                    // const userIdDisplay = document.getElementById('user-id-display');
-                    // if (userIdDisplay) {
-                    //     userIdDisplay.textContent = `사용자 ID: ${currentUserId}`;
-                    // }
 
                     // 컬렉션 참조 설정 (public/data 경로 사용)
                     ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
@@ -148,6 +148,24 @@
                     return '';
             }
         }
+
+
+        // --- 탭 전환 기능 (전역 함수로 노출) ---
+        window.showTab = function (tabId) { // window.showTab으로 변경
+            const navTabs = document.querySelectorAll('.nav-tab');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            navTabs.forEach(tab => tab.classList.remove('active'));
+            tabContents.forEach(content => content.classList.remove('active'));
+
+            document.querySelector(`.nav-tab[onclick="showTab('${tabId}')"]`).classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+
+            // 관리자 탭으로 전환 시 대시보드 업데이트 시도
+            if (tabId === 'admin' && document.getElementById('admin-dashboard-panel').style.display === 'block') {
+                updateAdminDashboard();
+            }
+        };
 
 
         // --- 식사 메뉴 탭 (평가 기능) ---
