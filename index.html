@@ -663,21 +663,24 @@
                 }
 
                 // 3단계: 모달에 없는 기존 Firestore 문서를 삭제합니다.
-                const existingFirestoreExclusionsQuery = query(exclusionsCollection,
-                    where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId)
-                );
-                const existingFirestoreSnapshot = await getDocs(existingFirestoreExclusionsQuery);
-                const deletePromises = [];
-                existingFirestoreSnapshot.forEach(doc => {
-                    if (!mealTypesInModal.has(doc.data().mealType)) {
-                        console.log(`[Modal Save] Deleting old exclusion for ${doc.data().mealType} not present in modal.`);
-                        deletePromises.push(deleteDoc(doc.ref));
-                    }
-                });
+                // 이 부분은 사용자 요청에 따라 제거됩니다.
+                // const existingFirestoreExclusionsQuery = query(exclusionsCollection,
+                //     where("date", "==", tomorrowDate),
+                //     where("userId", "==", currentUserId)
+                // );
+                // const existingFirestoreSnapshot = await getDocs(existingFirestoreExclusionsQuery);
+                // const deletePromises = [];
+                // existingFirestoreSnapshot.forEach(doc => {
+                //     if (!mealTypesInModal.has(doc.data().mealType)) {
+                //         console.log(`[Modal Save] Deleting old exclusion for ${doc.data().mealType} not present in modal.`);
+                //         deletePromises.push(deleteDoc(doc.ref));
+                //     }
+                // });
 
-                await Promise.all([...upsertPromises, ...deletePromises]);
-                console.log(`[Modal] Save operation completed. Upserted ${upsertPromises.length}, deleted ${deletePromises.length} entries.`);
+                // await Promise.all([...upsertPromises, ...deletePromises]); // 삭제 로직 제거
+                await Promise.all(upsertPromises); // Upsert만 수행
+
+                console.log(`[Modal] Save operation completed. Upserted ${upsertPromises.length} entries.`);
 
                 window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
