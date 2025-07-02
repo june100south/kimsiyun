@@ -421,7 +421,7 @@
         // 모달은 항상 사용자의 내일 모든 제외 신청을 관리합니다.
 
         window.openExclusionModal = async function() { // 전역 함수로 노출
-            console.log("[Modal] Attempting to open exclusion modal. Current User ID:", currentUserId);
+            console.log("[Modal] Attempting to open exclusion modal for NEW entry.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -429,7 +429,26 @@
                 return;
             }
 
-            document.getElementById('modal-title').textContent = '식사 제외 신청';
+            document.getElementById('modal-title').textContent = '새로운 식사 제외 신청';
+            const container = document.getElementById('exclusion-entries-container');
+            container.innerHTML = ''; // 항상 기존 항목 모두 비우고 새로운 항목 추가
+            window.addExclusionEntry(); // 항상 빈 항목 하나 추가
+
+            document.getElementById('exclusionModal').style.display = 'flex';
+            console.log("[Modal] Exclusion modal opened for new entry.");
+        }
+
+        // "수정하기" 버튼은 이제 단순히 `openExclusionModal`을 호출합니다.
+        window.openExclusionModalForEdit = async function(mealTypeToEdit) {
+            console.log(`[Modal] Edit button clicked for ${mealTypeToEdit}. Opening unified exclusion modal for EDIT.`);
+            const reservationButton = document.getElementById('reservation-button');
+            if (reservationButton.classList.contains('disabled')) {
+                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                console.log("[Modal] Cannot open: Reservation button is disabled.");
+                return;
+            }
+
+            document.getElementById('modal-title').textContent = '식사 제외 신청 수정';
             const container = document.getElementById('exclusion-entries-container');
             container.innerHTML = ''; // 기존 항목 모두 비우기
 
@@ -446,35 +465,29 @@
                     where("date", "==", tomorrowDate),
                     where("userId", "==", currentUserId)
                 );
-                console.log(`[Modal Load] Querying for exclusions. Date: ${tomorrowDate}, UserID: ${currentUserId}`);
+                console.log(`[Modal Load for Edit] Querying for exclusions. Date: ${tomorrowDate}, UserID: ${currentUserId}`);
                 const querySnapshot = await getDocs(q);
-                console.log(`[Modal Load] Query snapshot empty: ${querySnapshot.empty}, Size: ${querySnapshot.size}`);
+                console.log(`[Modal Load for Edit] Query snapshot empty: ${querySnapshot.empty}, Size: ${querySnapshot.size}`);
 
 
                 if (!querySnapshot.empty) {
                     querySnapshot.forEach(doc => {
                         const data = doc.data();
-                        console.log("[Modal Load] Found existing exclusion:", data);
+                        console.log("[Modal Load for Edit] Found existing exclusion:", data);
                         window.addExclusionEntry(data.mealType, data.reason, data.students);
                     });
-                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions.`);
+                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions for edit.`);
                 } else {
-                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가
-                    console.log("[Modal] No existing exclusions, adding empty entry.");
+                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가 (수정할 내용이 없으므로 새롭게 시작)
+                    console.log("[Modal] No existing exclusions for edit, adding empty entry.");
                 }
             } catch (e) {
-                console.error("Error loading exclusions for modal:", e);
+                console.error("Error loading exclusions for modal (edit mode):", e);
                 showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
             }
 
             document.getElementById('exclusionModal').style.display = 'flex';
-            console.log("[Modal] Exclusion modal opened.");
-        }
-
-        // "수정하기" 버튼은 이제 단순히 `openExclusionModal`을 호출합니다.
-        window.openExclusionModalForEdit = function(mealTypeToEdit) {
-            console.log(`[Modal] Edit button clicked for ${mealTypeToEdit}. Opening unified exclusion modal.`);
-            window.openExclusionModal(); // 모든 내역을 불러오는 통합 모달 함수 호출
+            console.log("[Modal] Exclusion modal opened for edit.");
         };
 
 
@@ -542,6 +555,9 @@
             let isValid = true;
             const savePromises = [];
 
+            // Track meal types processed in this save operation to handle potential duplicates in modal
+            const processedMealTypes = new Set();
+
             for (const entryElement of entriesInModal) {
                 const mealTypeSelect = entryElement.querySelector('select');
                 const mealType = mealTypeSelect.value;
@@ -565,6 +581,13 @@
                     showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
                     break;
                 }
+
+                // Prevent processing the same meal type multiple times from the modal if user added duplicates
+                if (processedMealTypes.has(mealType)) {
+                    console.warn(`[Modal Save] Skipping duplicate meal type '${mealType}' in modal.`);
+                    continue;
+                }
+                processedMealTypes.add(mealType);
 
                 // Check if an existing exclusion for this mealType and userId already exists for tomorrow
                 const existingQuery = query(exclusionsCollection,
