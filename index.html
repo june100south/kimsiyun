@@ -375,8 +375,10 @@
 
                 const deadlineDate = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), deadlineHour, deadlineMinute, 0, 0);
 
+                console.log(`Deadline check for ${mealType}: Now: ${now.toLocaleString()}, Deadline: ${deadlineDate.toLocaleString()}`);
                 if (now > deadlineDate) {
                     isPastDeadline = true;
+                    console.log(`${mealType} deadline passed.`);
                     break;
                 }
             }
@@ -384,16 +386,18 @@
             if (isPastDeadline) {
                 reservationButton.classList.add('disabled');
                 reservationButton.textContent = '식사 제외 신청 마감';
+                console.log("Reservation button disabled due to past deadline.");
             } else {
                 reservationButton.classList.remove('disabled');
                 reservationButton.textContent = '식사 제외 신청';
+                console.log("Reservation button enabled.");
             }
         }
 
         let currentModalMode = 'add';
         let currentMealTypeBeingEdited = null;
 
-        function openExclusionModal() {
+        window.openExclusionModal = function() { // 전역 함수로 노출
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -408,7 +412,7 @@
             document.getElementById('exclusionModal').style.display = 'flex';
         }
 
-        async function openExclusionModalForEdit(mealTypeToEdit) {
+        window.openExclusionModalForEdit = async function(mealTypeToEdit) { // 전역 함수로 노출
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -452,11 +456,11 @@
             document.getElementById('exclusionModal').style.display = 'flex';
         }
 
-        function closeExclusionModal() {
+        window.closeExclusionModal = function() { // 전역 함수로 노출
             document.getElementById('exclusionModal').style.display = 'none';
         }
 
-        function addExclusionEntry(mealType = '', reason = '', students = []) {
+        window.addExclusionEntry = function(mealType = '', reason = '', students = []) { // 전역 함수로 노출
             const container = document.getElementById('exclusion-entries-container');
             const entryCount = container.querySelectorAll('.exclusion-entry').length;
             const newEntry = document.createElement('div');
@@ -494,12 +498,12 @@
             }
         }
 
-        function removeExclusionEntry(button) {
+        window.removeExclusionEntry = function(button) { // 전역 함수로 노출
             const entryElement = button.closest('.exclusion-entry');
             entryElement.remove();
         }
 
-        async function saveExclusions() {
+        window.saveExclusions = async function() { // 전역 함수로 노출
             if (!currentUserId || !exclusionsCollection) {
                 showCustomAlert("데이터를 저장할 수 없습니다. 사용자 인증 상태를 확인하거나 잠시 후 다시 시도해주세요.");
                 return;
@@ -640,7 +644,7 @@
                     const editButton = document.createElement('button');
                     editButton.classList.add('edit-summary-btn');
                     editButton.textContent = '수정하기';
-                    editButton.onclick = () => openExclusionModalForEdit(category.key);
+                    editButton.onclick = () => window.openExclusionModalForEdit(category.key); // 전역 함수 호출
                     categoryHeader.appendChild(editButton);
 
                     categoryDiv.appendChild(categoryHeader);
@@ -686,8 +690,9 @@
 
         const ADMIN_PASSWORD = "admin"; // 실제 서비스에서는 더 안전한 방법 사용
 
-        function adminLogin() {
+        window.adminLogin = function() { // 전역 함수로 노출
             const passwordInput = document.getElementById('admin-password');
+            console.log(`Admin Login Attempt: Entered Password: "${passwordInput.value}", Expected: "${ADMIN_PASSWORD}"`);
             if (passwordInput.value === ADMIN_PASSWORD) {
                 document.getElementById('admin-login-panel').style.display = 'none';
                 document.getElementById('admin-dashboard-panel').style.display = 'block';
@@ -818,7 +823,7 @@
                         entriesForCategory.forEach(entry => {
                             entry.students.forEach(student => {
                                 const li = document.createElement('li');
-                                li.textContent = `${student} (이유: ${entry.reason})`;
+                                li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
                                 ul.appendChild(li);
                             });
                         });
@@ -836,7 +841,7 @@
             }
         }
 
-        function printAdminSummary() {
+        window.printAdminSummary = function() { // 전역 함수로 노출
             window.print();
         }
     </script>
@@ -1501,7 +1506,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="네코맘마덮밥">네코맘마덮밥</div>
                         </div>
-                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="네코맘마덮밥">
+                        <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1514,7 +1519,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="비스킷">비스킷</div>
                         </div>
-                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="비스킷">
+                        <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1527,7 +1532,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="삼치데리야끼구이">삼치데리야끼구이</div>
                         </div>
-                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="삼치데리야끼구이">
+                        <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1540,7 +1545,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="시리얼&우유">시리얼&우유</div>
                         </div>
-                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="시리얼&우유">
+                        <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1564,7 +1569,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="목살필라프">목살필라프</div>
                         </div>
-                        <div class="star-rating" data-meal-time="lunch" data-menu-name="목살필라프">
+                        <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1577,7 +1582,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="차지키샐러드">차지키샐러드</div>
                         </div>
-                        <div class="star-rating" data-meal-time="lunch" data-menu-name="차지키샐러드">
+                        <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1590,7 +1595,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="장각치킨구이">장각치킨구이</div>
                         </div>
-                        <div class="star-rating" data-meal-time="lunch" data-menu-name="장각치킨구이">
+                        <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1603,7 +1608,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="복숭아">복숭아</div>
                         </div>
-                        <div class="star-rating" data-meal-time="lunch" data-menu-name="복숭아">
+                        <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1627,7 +1632,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="구운주먹밥">구운주먹밥</div>
                         </div>
-                        <div class="star-rating" data-meal-time="dinner" data-menu-name="구운주먹밥">
+                        <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1640,7 +1645,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="해물찌개">해물찌개</div>
                         </div>
-                        <div class="star-rating" data-meal-time="dinner" data-menu-name="해물찌개">
+                        <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1653,7 +1658,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="돈파이">돈파이</div>
                         </div>
-                        <div class="star-rating" data-meal-time="dinner" data-menu-name="돈파이">
+                        <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1666,7 +1671,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="쿨피스">쿨피스</div>
                         </div>
-                        <div class="star-rating" data-meal-time="dinner" data-menu-name="쿨피스">
+                        <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1679,7 +1684,7 @@
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="방울토마토">방울토마토</div>
                         </div>
-                        <div class="star-rating" data-meal-time="dinner" data-menu-name="방울토마토">
+                        <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
                             <span class="star" data-value="2">★</span>
                             <span class="star" data-value="3">★</span>
@@ -1704,7 +1709,7 @@
                     </ul>
                     <p>마감 시간 이후에는 신청하거나 수정할 수 없습니다.</p>
                 </div>
-                <button class="btn" id="reservation-button" onclick="openExclusionModal()">식사 제외 신청</button>
+                <button class="btn" id="reservation-button" onclick="window.openExclusionModal()">식사 제외 신청</button>
             </div>
 
             <div class="reservation-card" id="exclusion-summary-card">
@@ -1719,7 +1724,7 @@
             <div class="admin-login-card" id="admin-login-panel">
                 <h3>관리자 로그인</h3>
                 <input type="password" id="admin-password" placeholder="비밀번호를 입력하세요">
-                <button class="btn" onclick="adminLogin()">로그인</button>
+                <button class="btn" onclick="window.adminLogin()">로그인</button>
             </div>
 
             <div class="admin-dashboard-card" id="admin-dashboard-panel" style="display: none;">
@@ -1738,7 +1743,7 @@
                         <!-- Exclusion list will be loaded here -->
                     </div>
                 </div>
-                <button class="btn btn-print" onclick="printAdminSummary()">요약 인쇄</button>
+                <button class="btn btn-print" onclick="window.printAdminSummary()">요약 인쇄</button>
             </div>
         </div>
     </div>
@@ -1746,18 +1751,18 @@
     <!-- Exclusion Request Modal -->
     <div id="exclusionModal" class="modal">
         <div class="modal-content">
-            <span class="close-button" onclick="closeExclusionModal()">&times;</span>
+            <span class="close-button" onclick="window.closeExclusionModal()">&times;</span>
             <h3 id="modal-title">식사 제외 신청</h3>
 
             <div id="exclusion-entries-container">
                 <!-- Exclusion entry forms will be added here -->
             </div>
 
-            <button class="add-exclusion-entry-in-modal" onclick="addExclusionEntry()">+ 항목 추가</button>
+            <button class="add-exclusion-entry-in-modal" onclick="window.addExclusionEntry()">+ 항목 추가</button>
 
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="closeExclusionModal()">취소</button>
-                <button class="btn" onclick="saveExclusions()">저장</button>
+                <button class="btn btn-secondary" onclick="window.closeExclusionModal()">취소</button>
+                <button class="btn" onclick="window.saveExclusions()">저장</button>
             </div>
         </div>
     </div>
