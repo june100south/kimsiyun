@@ -752,6 +752,7 @@
 
                             const studentNamesList = entry.students.map(s => `<li>${s}</li>`).join('');
 
+                            // 제외 학생과 이유를 함께 표시하도록 수정
                             summaryItem.innerHTML = `
                                 <strong>제외 학생: (${entry.students.length}명)</strong>
                                 <ul>
@@ -918,6 +919,7 @@
                         const ul = document.createElement('ul');
                         entriesForCategory.forEach(entry => {
                             entry.students.forEach(student => {
+                                // 제외 학생과 이유를 함께 표시하도록 수정
                                 const li = document.createElement('li');
                                 li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
                                 ul.appendChild(li);
