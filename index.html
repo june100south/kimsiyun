@@ -412,7 +412,7 @@
                 console.log("[Reservation Button] Disabled due to past deadline.");
             } else {
                 reservationButton.classList.remove('disabled');
-                reservationButton.textContent = '식사 제외 신청';
+                reservationButton.textContent = '새로운 식사 제외 신청'; // 텍스트 수정
                 console.log("[Reservation Button] Enabled.");
             }
         }
@@ -538,10 +538,11 @@
 
             const container = document.getElementById('exclusion-entries-container');
             const entriesInModal = container.querySelectorAll('.exclusion-entry');
-            const newOrEditedExclusions = [];
+            const tomorrowDate = getTomorrowDateString();
             let isValid = true;
+            const savePromises = [];
 
-            entriesInModal.forEach(entryElement => {
+            for (const entryElement of entriesInModal) {
                 const mealTypeSelect = entryElement.querySelector('select');
                 const mealType = mealTypeSelect.value;
                 const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
@@ -552,25 +553,50 @@
                 if (!mealType) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목의 식사를 선택해주세요.');
-                    return;
+                    break;
                 }
                 if (students.length === 0) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목에 학번 이름을 최소 한 명 이상 입력해주세요.');
-                    return;
+                    break;
                 }
                 if (!reason) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
-                    return;
+                    break;
                 }
 
-                newOrEditedExclusions.push({
-                    mealType: mealType,
-                    reason: reason,
-                    students: students
-                });
-            });
+                // Check if an existing exclusion for this mealType and userId already exists for tomorrow
+                const existingQuery = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId),
+                    where("mealType", "==", mealType)
+                );
+                const existingSnapshot = await getDocs(existingQuery);
+
+                if (!existingSnapshot.empty) {
+                    // Update existing document
+                    existingSnapshot.forEach(docToUpdate => {
+                        console.log(`[Modal Save] Updating existing exclusion for ${mealType}:`, { reason, students });
+                        savePromises.push(updateDoc(docToUpdate.ref, {
+                            reason: reason,
+                            students: students,
+                            timestamp: new Date()
+                        }));
+                    });
+                } else {
+                    // Add new document
+                    console.log(`[Modal Save] Adding new exclusion for ${mealType}:`, { reason, students });
+                    savePromises.push(addDoc(exclusionsCollection, {
+                        userId: currentUserId,
+                        mealType: mealType,
+                        reason: reason,
+                        students: students,
+                        date: tomorrowDate,
+                        timestamp: new Date()
+                    }));
+                }
+            }
 
             if (!isValid) {
                 console.warn("[Modal] Save aborted: Form validation failed.");
@@ -578,38 +604,10 @@
             }
 
             try {
-                const tomorrowDate = getTomorrowDateString();
+                await Promise.all(savePromises);
+                console.log(`[Modal] Save operation completed for ${savePromises.length} entries.`);
 
-                // 현재 사용자의 내일 제외 신청을 모두 삭제 (모달의 내용으로 완전히 대체하기 위함)
-                const existingExclusionsQuery = query(exclusionsCollection,
-                    where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId)
-                );
-                const existingExclusionsSnapshot = await getDocs(existingExclusionsQuery);
-                const deletePromises = [];
-                existingExclusionsSnapshot.forEach((doc) => {
-                    deletePromises.push(deleteDoc(doc.ref));
-                });
-                await Promise.all(deletePromises);
-                console.log(`[Modal] Deleted ${deletePromises.length} existing exclusions for current user.`);
-                console.log("[Modal Save] Exclusions to be saved:", newOrEditedExclusions); // 추가된 로그
-
-                // 모달에 있는 새로운/수정된 제외 신청을 추가
-                const addPromises = [];
-                newOrEditedExclusions.forEach(exclusion => {
-                    addPromises.push(addDoc(exclusionsCollection, {
-                        userId: currentUserId,
-                        mealType: exclusion.mealType,
-                        reason: exclusion.reason,
-                        students: exclusion.students,
-                        date: tomorrowDate,
-                        timestamp: new Date()
-                    }));
-                });
-                await Promise.all(addPromises);
-                console.log(`[Modal] Added ${addPromises.length} new/edited exclusions.`);
-
-                window.closeExclusionModal(); // window.closeExclusionModal로 변경
+                window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
             } catch (e) {
                 console.error("Error saving exclusions: ", e);
@@ -1743,7 +1741,7 @@
                     </ul>
                     <p>마감 시간 이후에는 신청하거나 수정할 수 없습니다.</p>
                 </div>
-                <button class="btn" id="reservation-button" onclick="window.openExclusionModal()">식사 제외 신청</button>
+                <button class="btn" id="reservation-button" onclick="window.openExclusionModal()">새로운 식사 제외 신청</button>
             </div>
 
             <div class="reservation-card" id="exclusion-summary-card">
