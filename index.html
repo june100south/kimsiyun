@@ -18,6 +18,8 @@
         // Firebase 설정은 Canvas 환경에서 제공되는 __firebase_config 변수를 사용합니다.
         // 만약 __firebase_config가 정의되지 않았다면 빈 객체를 기본값으로 사용합니다.
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        // 'initialAuthToken'이 선언되기 전에 자신을 참조하는 문제를 해결하기 위해
+        // '__initial_auth_token' 원본 변수를 사용하도록 수정했습니다.
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         // Firebase 및 Firestore 인스턴스 변수
@@ -437,6 +439,11 @@
             window.addExclusionEntry(); // Add one new, blank entry
             console.log("[Modal] Added one new blank entry for new request."); // Added log for debugging
 
+            // 'mode-new' 클래스를 추가하여 CSS에서 특정 버튼을 숨기거나 보이게 할 수 있습니다.
+            // 현재 요청에 따라 이 클래스는 더 이상 특정 버튼을 숨기는 데 사용되지 않습니다.
+            document.querySelector('#exclusionModal .modal-content').classList.add('mode-new');
+            document.querySelector('#exclusionModal .modal-content').classList.remove('mode-edit');
+
             document.getElementById('exclusionModal').style.display = 'flex';
             console.log("[Modal] Exclusion modal opened for new entry.");
         }
@@ -490,6 +497,10 @@
                 showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
             }
 
+            // 'mode-edit' 클래스를 추가하여 CSS에서 특정 버튼을 숨기거나 보이게 할 수 있습니다.
+            document.querySelector('#exclusionModal .modal-content').classList.add('mode-edit');
+            document.querySelector('#exclusionModal .modal-content').classList.remove('mode-new');
+
             document.getElementById('exclusionModal').style.display = 'flex';
             console.log("[Modal] Exclusion modal opened for edit.");
         };
@@ -498,6 +509,8 @@
         window.closeExclusionModal = function() { // 전역 함수로 노출
             console.log("[Modal] Closing exclusion modal.");
             document.getElementById('exclusionModal').style.display = 'none';
+            // 모달 닫을 때 모드 클래스 초기화
+            document.querySelector('#exclusionModal .modal-content').classList.remove('mode-new', 'mode-edit');
         }
 
         // docId 매개변수를 추가하여 기존 문서인지 여부를 추적
@@ -597,8 +610,8 @@
             let isValid = true;
 
             const entriesToProcess = []; // { docId, data } for updates and additions
-            const docIdsPresentInModal = new Set(); // 모달에 현재 존재하는 기존 문서 ID를 추적
-
+            
+            // 모든 항목에 대해 유효성 검사 및 데이터 수집
             entriesInModal.forEach(entryElement => {
                 const mealTypeSelect = entryElement.querySelector('select[id^="modal-meal-type-"]');
                 const mealType = mealTypeSelect.value;
@@ -638,9 +651,6 @@
                 };
 
                 entriesToProcess.push({ docId, data: entryData });
-                if (docId) {
-                    docIdsPresentInModal.add(docId); // 모달에 존재하는 기존 문서 ID 추가
-                }
             });
 
             if (!isValid) {
@@ -651,39 +661,55 @@
             try {
                 const batch = writeBatch(db); // Firestore Batch 사용
 
-                // 1. 모달에 없는 기존 항목 삭제
-                const existingExclusionsQuery = query(exclusionsCollection,
-                    where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId)
-                );
-                const existingExclusionsSnapshot = await getDocs(existingExclusionsQuery);
+                // 현재 모달이 어떤 모드로 열렸는지 확인
+                const isNewApplicationMode = document.querySelector('#exclusionModal .modal-content').classList.contains('mode-new');
 
-                existingExclusionsSnapshot.forEach(docSnap => {
-                    if (!docIdsPresentInModal.has(docSnap.id)) {
-                        // 기존 문서가 모달에 없으면 삭제
-                        batch.delete(docSnap.ref);
-                        console.log(`[Modal Save] Deleting removed exclusion: ${docSnap.id}`);
-                    }
-                });
-
-                // 2. 모달에 있는 항목 추가 또는 업데이트
-                entriesToProcess.forEach(entry => {
-                    if (entry.docId) {
-                        // 기존 문서 업데이트
-                        const docRef = doc(exclusionsCollection, entry.docId);
-                        batch.set(docRef, entry.data, { merge: true }); // set with merge를 사용하여 업데이트
-                        console.log(`[Modal Save] Updating existing exclusion: ${entry.docId}`, entry.data);
-                    } else {
-                        // 새 문서 추가
+                if (isNewApplicationMode) {
+                    // '새로운 식사 제외 신청' 모드: 모든 항목을 새 문서로 추가
+                    // 이전에 저장된 어떤 문서도 삭제하지 않습니다.
+                    for (const entry of entriesToProcess) {
                         const newDocRef = doc(exclusionsCollection); // Firestore가 ID 자동 생성
-                        batch.set(newDocRef, entry.data); // set을 사용하여 새 문서 추가
-                        console.log(`[Modal Save] Adding new exclusion:`, entry.data);
+                        batch.set(newDocRef, entry.data);
+                        console.log(`[Modal Save - New Mode] Adding new exclusion:`, entry.data);
                     }
-                });
+                } else {
+                    // '식사 제외 신청 수정' 모드: 기존 문서 업데이트, 추가, 삭제 처리
+                    const docIdsPresentInModal = new Set(entriesToProcess.filter(e => e.docId).map(e => e.docId));
+
+                    // 1. 모달에 없는 기존 항목 삭제
+                    const existingExclusionsQuery = query(exclusionsCollection,
+                        where("date", "==", tomorrowDate),
+                        where("userId", "==", currentUserId)
+                    );
+                    const existingExclusionsSnapshot = await getDocs(existingExclusionsQuery);
+
+                    existingExclusionsSnapshot.forEach(docSnap => {
+                        if (!docIdsPresentInModal.has(docSnap.id)) {
+                            // 기존 문서가 모달에 없으면 삭제
+                            batch.delete(docSnap.ref);
+                            console.log(`[Modal Save - Edit Mode] Deleting removed exclusion: ${docSnap.id}`);
+                        }
+                    });
+
+                    // 2. 모달에 있는 항목 추가 또는 업데이트
+                    for (const entry of entriesToProcess) {
+                        if (entry.docId) {
+                            // 기존 문서 업데이트
+                            const docRef = doc(exclusionsCollection, entry.docId);
+                            batch.set(docRef, entry.data, { merge: true }); // set with merge를 사용하여 업데이트
+                            console.log(`[Modal Save - Edit Mode] Updating existing exclusion: ${entry.docId}`, entry.data);
+                        } else {
+                            // 새 문서 추가
+                            const newDocRef = doc(exclusionsCollection); // Firestore가 ID 자동 생성
+                            batch.set(newDocRef, entry.data); // set을 사용하여 새 문서 추가
+                            console.log(`[Modal Save - Edit Mode] Adding new exclusion:`, entry.data);
+                        }
+                    }
+                }
 
                 await batch.commit(); // 모든 배치 작업 커밋
 
-                console.log(`[Modal] Save operation completed. Processed ${entriesToProcess.length} entries, Deleted ${existingExclusionsSnapshot.size - docIdsPresentInModal.size} entries.`);
+                console.log(`[Modal] Save operation completed. Processed ${entriesToProcess.length} entries.`);
 
                 window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
@@ -1388,6 +1414,10 @@
         .add-exclusion-entry-in-modal:hover {
             background: #138496;
         }
+
+        /* 이전에 숨겼던 버튼들을 다시 보이도록 관련 CSS를 제거했습니다. */
+        /* .modal-content.mode-new .add-exclusion-entry-in-modal { display: none; } */
+        /* .modal-content.mode-new .exclusion-entry .remove-entry-btn { display: none; } */
 
 
         .modal-actions {
