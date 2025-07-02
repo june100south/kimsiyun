@@ -372,6 +372,8 @@
         }
 
         // --- 내 평가 초기화 함수 ---
+        // 사용자 요청에 따라 이 함수는 더 이상 사용되지 않으므로 제거합니다.
+        /*
         window.resetMyRating = async function(mealTime, menuName) {
             if (!currentUserId || !ratingsCollection) {
                 showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
@@ -397,6 +399,7 @@
                 showCustomAlert("평가 초기화 중 오류가 발생했습니다.");
             }
         };
+        */
 
 
         // --- 식사 예약 탭 (제외 신청 기능) ---
@@ -613,6 +616,7 @@
                     // 학생 목록을 통합합니다 (중복 방지).
                     modalDataByMealType[mealType].students = [...new Set([...modalDataByMealType[mealType].students, ...students])];
                     // 이유를 통합합니다 (간단한 문자열 연결).
+                    // 기존 이유에 새로운 이유가 포함되어 있지 않으면 추가합니다.
                     if (reason && !modalDataByMealType[mealType].reason.includes(reason)) {
                         modalDataByMealType[mealType].reason += `; ${reason}`;
                     }
@@ -662,22 +666,8 @@
                     }
                 }
 
-                // 3단계: 모달에 없는 기존 Firestore 문서를 삭제합니다.
-                // 이 부분은 사용자 요청에 따라 제거됩니다.
-                // const existingFirestoreExclusionsQuery = query(exclusionsCollection,
-                //     where("date", "==", tomorrowDate),
-                //     where("userId", "==", currentUserId)
-                // );
-                // const existingFirestoreSnapshot = await getDocs(existingFirestoreExclusionsQuery);
-                // const deletePromises = [];
-                // existingFirestoreSnapshot.forEach(doc => {
-                //     if (!mealTypesInModal.has(doc.data().mealType)) {
-                //         console.log(`[Modal Save] Deleting old exclusion for ${doc.data().mealType} not present in modal.`);
-                //         deletePromises.push(deleteDoc(doc.ref));
-                //     }
-                // });
-
-                // await Promise.all([...upsertPromises, ...deletePromises]); // 삭제 로직 제거
+                // 3단계: 모달에 없는 기존 Firestore 문서를 삭제하는 로직은 사용자 요청에 따라 제거됩니다.
+                // 이전 대화에서 이 로직을 제거했으므로, 다시 추가하지 않습니다.
                 await Promise.all(upsertPromises); // Upsert만 수행
 
                 console.log(`[Modal] Save operation completed. Upserted ${upsertPromises.length} entries.`);
@@ -1162,14 +1152,16 @@
             min-width: 30px;
         }
 
+        /* "내 평가 초기화" 버튼 제거로 인해 관련 CSS도 제거합니다. */
+        /*
         .reset-rating-btn {
-            background: #f44336; /* Red color for delete */
+            background: #f44336;
             color: white;
             border: none;
             padding: 5px 10px;
             border-radius: 5px;
             cursor: pointer;
-            font-size: 10px; /* Smaller font for reset button */
+            font-size: 10px;
             margin-top: 5px;
             transition: background 0.3s;
         }
@@ -1177,6 +1169,7 @@
         .reset-rating-btn:hover {
             background: #da190b;
         }
+        */
 
 
         .notification {
@@ -1625,7 +1618,7 @@
         <div id="meals" class="tab-content active">
             <div class="meal-time-section">
                 <div class="time-header">
-                    <span>🌅 아침 급식</span>
+                    <span>� 아침 급식</span>
                 </div>
                 <div class="menu-content">
                     <div class="meal-header">
@@ -1634,7 +1627,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="네코맘마덮밥">네코맘마덮밥</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '네코맘마덮밥')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1648,7 +1641,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="비스킷">비스킷</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '비스킷')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1662,7 +1655,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="삼치데리야끼구이">삼치데리야끼구이</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '삼치데리야끼구이')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1676,7 +1669,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="시리얼&우유">시리얼&우유</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '시리얼&우유')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1701,7 +1694,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="목살필라프">목살필라프</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '목살필라프')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1715,7 +1708,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="차지키샐러드">차지키샐러드</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '차지키샐러드')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1729,7 +1722,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="장각치킨구이">장각치킨구이</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '장각치킨구이')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1743,7 +1736,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="복숭아">복숭아</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '복숭아')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1768,7 +1761,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="구운주먹밥">구운주먹밥</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '구운주먹밥')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1782,7 +1775,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="해물찌개">해물찌개</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '해물찌개')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1796,7 +1789,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="돈파이">돈파이</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '돈파이')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1810,7 +1803,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="쿨피스">쿨피스</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '쿨피스')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1824,7 +1817,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="방울토마토">방울토마토</div>
-                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '방울토마토')">내 평가 초기화</button>
+                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
