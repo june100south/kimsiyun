@@ -6,27 +6,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>급식 매니저 - 스마트 급식 시스템</title>
 
-    <!-- Firebase SDKs -->
+    <!-- Firebase SDKs 및 모든 JavaScript 로직을 하나의 모듈 스크립트에 통합 -->
     <script type="module">
         // Firebase 앱 및 Firestore 관련 모듈 가져오기
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
+        // Firebase 및 Firestore 인스턴스 변수 (모듈 스코프 최상단에 선언)
         let app;
         let db;
         let auth;
         let currentUserId = null; // 현재 사용자 ID (인증 후 설정됨)
-
         let ratingsCollection;
         let exclusionsCollection;
 
-        // Firebase 및 Firestore 초기화 함수
+        // --- Firebase 및 Firestore 초기화 함수 ---
         async function initializeFirebaseAndFirestore() {
             try {
                 app = initializeApp(firebaseConfig);
@@ -40,7 +40,7 @@
                     await signInAnonymously(auth);
                 }
 
-                // 인증 상태 변화 감지
+                // 인증 상태 변화 감지 및 모든 앱 로직 시작
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         currentUserId = user.uid;
@@ -60,7 +60,7 @@
                     ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
                     exclusionsCollection = collection(db, `artifacts/${appId}/public/data/exclusions`);
 
-                    // 초기 데이터 로드 및 실시간 리스너 설정
+                    // --- 초기 데이터 로드 및 실시간 리스너 설정 ---
                     initStarRatings(); // 별점 초기화 및 실시간 리스너 설정
                     updateReservationDeadlines(); // 예약 마감 시간 업데이트
                     updateExclusionSummary(); // 제외 신청 요약 업데이트
@@ -116,23 +116,682 @@
         // DOM 로드 후 Firebase 초기화 시작
         document.addEventListener('DOMContentLoaded', initializeFirebaseAndFirestore);
 
-        // 전역 스크립트에서 접근할 수 있도록 window 객체에 노출
-        window.db = db;
-        window.auth = auth;
-        window.getUserId = () => currentUserId; // 현재 userId를 가져오는 함수
-        window.ratingsCollection = ratingsCollection;
-        window.exclusionsCollection = exclusionsCollection;
-        window.initializeApp = initializeApp; // initializeApp도 노출
-        window.getFirestore = getFirestore; // getFirestore도 노출
-        window.collection = collection; // collection도 노출
-        window.addDoc = addDoc; // addDoc도 노출
-        window.setDoc = setDoc; // setDoc도 노출
-        window.updateDoc = updateDoc; // updateDoc도 노출
-        window.deleteDoc = deleteDoc; // deleteDoc도 노출
-        window.onSnapshot = onSnapshot; // onSnapshot도 노출
-        window.query = query; // query도 노출
-        window.where = where; // where도 노출
-        window.getDocs = getDocs; // getDocs도 노출
+
+        // --- 커스텀 알림 모달 ---
+        function showCustomAlert(message) {
+            const alertModal = document.getElementById('custom-alert-modal');
+            const alertMessage = document.getElementById('custom-alert-message');
+            alertMessage.textContent = message;
+            alertModal.style.display = 'flex';
+        }
+
+
+        // --- 날짜 및 시간 관련 헬퍼 함수 ---
+        function getTomorrowDateString() {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const year = tomorrow.getFullYear();
+            const month = (tomorrow.getMonth() + 1).toString().padStart(2, '0');
+            const day = tomorrow.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function getMealTypeName(mealType) {
+            switch (mealType) {
+                case 'breakfast':
+                    return '아침';
+                case 'lunch':
+                    return '점심';
+                case 'dinner':
+                    return '저녁';
+                default:
+                    return '';
+            }
+        }
+
+
+        // --- 식사 메뉴 탭 (평가 기능) ---
+
+        // 별점 시각적 업데이트 함수
+        function updateStarDisplay(stars, ratingValue) {
+            stars.forEach((star, index) => {
+                const starValue = index + 1;
+                if (ratingValue >= starValue) {
+                    star.classList.add('full');
+                    star.classList.remove('half');
+                } else if (ratingValue > index && ratingValue < starValue) {
+                    star.classList.add('half');
+                    star.classList.remove('full');
+                } else {
+                    star.classList.remove('full');
+                    star.classList.remove('half');
+                }
+            });
+        }
+
+        // 특정 메뉴 항목의 평균 평가를 Firestore에서 가져와 UI 업데이트
+        async function updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan) {
+            if (!ratingsCollection) {
+                console.warn("Firestore ratingsCollection not initialized yet.");
+                return;
+            }
+            try {
+                // 해당 메뉴 항목에 대한 모든 평가를 Firestore에서 쿼리
+                const q = query(ratingsCollection,
+                    where("mealTime", "==", mealTime),
+                    where("menuName", "==", menuName)
+                );
+
+                const querySnapshot = await getDocs(q);
+                let totalRating = 0;
+                let numberOfRatings = 0;
+                querySnapshot.forEach((doc) => {
+                    totalRating += doc.data().value;
+                    numberOfRatings++;
+                });
+
+                const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
+
+                updateStarDisplay(stars, average);
+                ratingValueSpan.textContent = average.toFixed(1);
+
+            } catch (e) {
+                console.error("Error updating menu item rating display:", e);
+            }
+        }
+
+        // 별점 클릭 이벤트 핸들러 (Firestore에 평가 저장)
+        async function handleStarClick(event) {
+            if (!currentUserId || !ratingsCollection) {
+                showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            const star = event.target;
+            const ratingDiv = star.closest('.star-rating');
+            const mealTime = ratingDiv.dataset.mealTime;
+            const menuName = ratingDiv.dataset.menuName;
+
+            const rect = star.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const starWidth = rect.width;
+            // 반 별점 허용 (클릭 위치에 따라 0.5점 단위로)
+            const value = clickX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
+
+            // 사용자별, 메뉴별 고유한 문서 ID 생성
+            const ratingDocId = `${currentUserId}_${mealTime}_${menuName}`;
+            const docRef = doc(ratingsCollection, ratingDocId);
+
+            try {
+                // setDoc을 사용하여 문서 생성 또는 업데이트
+                await setDoc(docRef, {
+                    userId: currentUserId,
+                    mealTime: mealTime,
+                    menuName: menuName,
+                    value: value,
+                    timestamp: new Date()
+                });
+                console.log("Rating saved successfully!");
+                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
+            } catch (e) {
+                console.error("Error adding/updating rating: ", e);
+                showCustomAlert("평가 저장 중 오류가 발생했습니다.");
+            }
+        }
+
+        // 별점 초기화 및 이벤트 리스너 설정
+        function initStarRatings() {
+            const starRatings = document.querySelectorAll('.star-rating');
+            starRatings.forEach(ratingDiv => {
+                const mealTime = ratingDiv.dataset.mealTime;
+                const menuName = ratingDiv.dataset.menuName;
+                const stars = ratingDiv.querySelectorAll('.star');
+                const ratingValueSpan = ratingDiv.querySelector('.rating-value');
+
+                // 초기 로드 시 평가 표시
+                updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
+
+                // 별점 클릭 이벤트 리스너 추가
+                stars.forEach((star) => {
+                    star.removeEventListener('click', handleStarClick); // 중복 방지
+                    star.addEventListener('click', handleStarClick);
+                    star.removeEventListener('mouseenter', handleStarHover);
+                    star.addEventListener('mouseenter', handleStarHover);
+                });
+
+                // 마우스가 별점 영역을 벗어났을 때 원래 평가로 돌아가기
+                ratingDiv.removeEventListener('mouseleave', handleStarMouseLeave);
+                ratingDiv.addEventListener('mouseleave', handleStarMouseLeave);
+            });
+        }
+
+        // 별점 마우스 오버 시 시각적 효과
+        function handleStarHover(e) {
+            const star = e.target;
+            const ratingDiv = star.closest('.star-rating');
+            const stars = ratingDiv.querySelectorAll('.star');
+            const rect = star.getBoundingClientRect();
+            const hoverX = e.clientX - rect.left;
+            const starWidth = rect.width;
+            const hoverValue = hoverX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
+            updateStarDisplay(stars, hoverValue);
+        }
+
+        // 별점 마우스 리브 시 원래 평가로 복원
+        function handleStarMouseLeave(e) {
+            const ratingDiv = e.target;
+            const mealTime = ratingDiv.dataset.mealTime;
+            const menuName = ratingDiv.dataset.menuName;
+            const stars = ratingDiv.querySelectorAll('.star');
+            const ratingValueSpan = ratingDiv.querySelector('.rating-value');
+            updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
+        }
+
+
+        // --- 식사 예약 탭 (제외 신청 기능) ---
+
+        const mealDeadlines = {
+            breakfast: "00:00", // 자정
+            lunch: "09:00", // 오전 9시
+            dinner: "15:30" // 오후 3시 30분
+        };
+
+        function updateReservationDeadlines() {
+            const now = new Date();
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1); // 내일 날짜
+
+            document.getElementById('deadline-breakfast').textContent = mealDeadlines.breakfast;
+            document.getElementById('deadline-lunch').textContent = mealDeadlines.lunch;
+            document.getElementById('deadline-dinner').textContent = mealDeadlines.dinner;
+
+            const reservationButton = document.getElementById('reservation-button');
+            let isPastDeadline = false;
+
+            for (const mealType in mealDeadlines) {
+                const deadlineTime = mealDeadlines[mealType];
+                const [deadlineHour, deadlineMinute] = deadlineTime.split(':').map(Number);
+
+                const deadlineDate = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), deadlineHour, deadlineMinute, 0, 0);
+
+                if (now > deadlineDate) {
+                    isPastDeadline = true;
+                    break;
+                }
+            }
+
+            if (isPastDeadline) {
+                reservationButton.classList.add('disabled');
+                reservationButton.textContent = '식사 제외 신청 마감';
+            } else {
+                reservationButton.classList.remove('disabled');
+                reservationButton.textContent = '식사 제외 신청';
+            }
+        }
+
+        let currentModalMode = 'add'; // 'add' 또는 'edit'
+        let currentMealTypeBeingEdited = null; // 수정 중인 식사 유형
+
+        function openExclusionModal() {
+            const reservationButton = document.getElementById('reservation-button');
+            if (reservationButton.classList.contains('disabled')) {
+                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                return;
+            }
+
+            currentModalMode = 'add';
+            document.getElementById('modal-title').textContent = '식사 제외 신청';
+            const container = document.getElementById('exclusion-entries-container');
+            container.innerHTML = ''; // 기존 항목 초기화
+            addExclusionEntry(); // 기본 항목 하나 추가
+            document.getElementById('exclusionModal').style.display = 'flex';
+        }
+
+        async function openExclusionModalForEdit(mealTypeToEdit) {
+            const reservationButton = document.getElementById('reservation-button');
+            if (reservationButton.classList.contains('disabled')) {
+                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                return;
+            }
+
+            currentModalMode = 'edit';
+            currentMealTypeBeingEdited = mealTypeToEdit;
+            document.getElementById('modal-title').textContent = `${getMealTypeName(mealTypeToEdit)} 식사 제외 수정`;
+
+            const container = document.getElementById('exclusion-entries-container');
+            container.innerHTML = '';
+
+            if (!currentUserId || !exclusionsCollection) {
+                showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
+                return;
+            }
+
+            const tomorrowDate = getTomorrowDateString();
+            try {
+                const q = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId),
+                    where("mealType", "==", mealTypeToEdit)
+                );
+                const querySnapshot = await getDocs(q);
+
+                if (!querySnapshot.empty) {
+                    querySnapshot.forEach(doc => {
+                        const data = doc.data();
+                        addExclusionEntry(data.mealType, data.reason, data.students);
+                    });
+                } else {
+                    addExclusionEntry(mealTypeToEdit); // 기존 신청이 없으면 빈 항목 추가
+                }
+            } catch (e) {
+                console.error("Error loading exclusions for edit:", e);
+                showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
+            }
+
+            document.getElementById('exclusionModal').style.display = 'flex';
+        }
+
+        function closeExclusionModal() {
+            document.getElementById('exclusionModal').style.display = 'none';
+        }
+
+        function addExclusionEntry(mealType = '', reason = '', students = []) {
+            const container = document.getElementById('exclusion-entries-container');
+            const entryCount = container.querySelectorAll('.exclusion-entry').length;
+            const newEntry = document.createElement('div');
+            newEntry.classList.add('exclusion-entry');
+            newEntry.innerHTML = `
+                <button type="button" class="remove-entry-btn" onclick="removeExclusionEntry(this)">&times;</button>
+                <div class="form-group">
+                    <label for="modal-meal-type-${entryCount}">식사 선택:</label>
+                    <select id="modal-meal-type-${entryCount}">
+                        <option value="">선택하세요</option>
+                        <option value="breakfast">아침</option>
+                        <option value="lunch">점심</option>
+                        <option value="dinner">저녁</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modal-reason-${entryCount}">제외 이유:</label>
+                    <textarea id="modal-reason-${entryCount}" placeholder="예: 회식, 외출, 병원 방문 등"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="modal-students-${entryCount}">제외 학생 (한 줄에 한 명씩):</label>
+                    <textarea id="modal-students-${entryCount}" placeholder="예:&#10;1206 김상윤&#10;1207 김시우"></textarea>
+                </div>
+            `;
+            container.appendChild(newEntry);
+
+            // 값 채우기 (수정 모드용)
+            if (mealType) {
+                newEntry.querySelector(`select`).value = mealType;
+            }
+            if (reason) {
+                newEntry.querySelector(`textarea[id^="modal-reason-"]`).value = reason;
+            }
+            if (students.length > 0) {
+                newEntry.querySelector(`textarea[id^="modal-students-"]`).value = students.join('\n');
+            }
+        }
+
+        function removeExclusionEntry(button) {
+            const entryElement = button.closest('.exclusion-entry');
+            entryElement.remove();
+        }
+
+        async function saveExclusions() {
+            if (!currentUserId || !exclusionsCollection) {
+                showCustomAlert("데이터를 저장할 수 없습니다. 사용자 인증 상태를 확인하거나 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            const container = document.getElementById('exclusion-entries-container');
+            const entriesInModal = container.querySelectorAll('.exclusion-entry');
+            const newOrEditedExclusions = [];
+            let isValid = true;
+
+            entriesInModal.forEach(entryElement => {
+                const mealTypeSelect = entryElement.querySelector('select');
+                const mealType = mealTypeSelect.value;
+                const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
+                const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
+
+                const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
+
+                if (!mealType) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목의 식사를 선택해주세요.');
+                    return;
+                }
+                if (students.length === 0) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목에 학번 이름을 최소 한 명 이상 입력해주세요.');
+                    return;
+                }
+                if (!reason) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
+                    return;
+                }
+
+                newOrEditedExclusions.push({
+                    mealType: mealType,
+                    reason: reason,
+                    students: students
+                });
+            });
+
+            if (!isValid) {
+                return;
+            }
+
+            try {
+                const tomorrowDate = getTomorrowDateString();
+
+                // 현재 사용자의 내일 제외 신청을 모두 삭제
+                const existingExclusionsQuery = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId)
+                );
+                const existingExclusionsSnapshot = await getDocs(existingExclusionsQuery);
+                const deletePromises = [];
+                existingExclusionsSnapshot.forEach((doc) => {
+                    deletePromises.push(deleteDoc(doc.ref));
+                });
+                await Promise.all(deletePromises);
+
+                // 새로운 또는 수정된 제외 신청을 추가
+                const addPromises = [];
+                newOrEditedExclusions.forEach(exclusion => {
+                    addPromises.push(addDoc(exclusionsCollection, {
+                        userId: currentUserId,
+                        mealType: exclusion.mealType,
+                        reason: exclusion.reason,
+                        students: exclusion.students,
+                        date: tomorrowDate,
+                        timestamp: new Date()
+                    }));
+                });
+                await Promise.all(addPromises);
+
+                closeExclusionModal();
+                showCustomAlert('식사 제외 신청이 저장되었습니다.');
+                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
+
+            } catch (e) {
+                console.error("Error saving exclusions: ", e);
+                showCustomAlert('식사 제외 신청 저장 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 식사 제외 신청 요약 업데이트
+        async function updateExclusionSummary() {
+            const summaryContainer = document.getElementById('exclusion-summary-list');
+            summaryContainer.innerHTML = '';
+
+            if (!currentUserId || !exclusionsCollection) {
+                document.getElementById('exclusion-summary-card').style.display = 'none';
+                return;
+            }
+
+            const tomorrowDate = getTomorrowDateString();
+
+            try {
+                // 현재 사용자의 내일 제외 신청만 가져옴
+                const q = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId)
+                );
+
+                const querySnapshot = await getDocs(q);
+
+                const groupedExclusions = {
+                    'breakfast': [],
+                    'lunch': [],
+                    'dinner': []
+                };
+
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (groupedExclusions[data.mealType]) {
+                        groupedExclusions[data.mealType].push(data);
+                    }
+                });
+
+                const mealCategories = [{
+                    key: 'breakfast',
+                    label: '🌅 아침'
+                }, {
+                    key: 'lunch',
+                    label: '🍽️ 점심'
+                }, {
+                    key: 'dinner',
+                    label: '🌙 저녁'
+                }];
+
+                let hasAnyExclusion = false;
+                mealCategories.forEach(category => {
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.classList.add('exclusion-summary-category');
+
+                    const categoryHeader = document.createElement('h4');
+                    categoryHeader.textContent = category.label;
+
+                    const editButton = document.createElement('button');
+                    editButton.classList.add('edit-summary-btn');
+                    editButton.textContent = '수정하기';
+                    editButton.onclick = () => openExclusionModalForEdit(category.key);
+                    categoryHeader.appendChild(editButton);
+
+                    categoryDiv.appendChild(categoryHeader);
+
+                    const entriesForCategory = groupedExclusions[category.key];
+                    if (entriesForCategory.length > 0) {
+                        hasAnyExclusion = true;
+                        entriesForCategory.forEach(entry => {
+                            const summaryItem = document.createElement('div');
+                            summaryItem.classList.add('exclusion-summary-item');
+
+                            const studentNamesList = entry.students.map(s => `<li>${s}</li>`).join('');
+
+                            summaryItem.innerHTML = `
+                                <strong>제외 학생: (${entry.students.length}명)</strong>
+                                <ul>
+                                    ${studentNamesList}
+                                </ul>
+                                <p>이유: ${entry.reason}</p>
+                            `;
+                            categoryDiv.appendChild(summaryItem);
+                        });
+                    } else {
+                        const noEntryMessage = document.createElement('p');
+                        noEntryMessage.classList.add('no-exclusion-message');
+                        noEntryMessage.textContent = '신청 내역이 없습니다.';
+                        categoryDiv.appendChild(noEntryMessage);
+                    }
+                    summaryContainer.appendChild(categoryDiv);
+                });
+
+                document.getElementById('exclusion-summary-card').style.display = 'block'; // 신청 내역이 있든 없든 카드는 항상 표시
+
+            } catch (e) {
+                console.error("Error updating exclusion summary:", e);
+                document.getElementById('exclusion-summary-card').style.display = 'none'; // 오류 시 숨김
+            }
+        }
+
+
+        // --- 관리자 탭 ---
+
+        const ADMIN_PASSWORD = "admin"; // 실제 서비스에서는 더 안전한 방법 사용
+
+        function adminLogin() {
+            const passwordInput = document.getElementById('admin-password');
+            if (passwordInput.value === ADMIN_PASSWORD) {
+                document.getElementById('admin-login-panel').style.display = 'none';
+                document.getElementById('admin-dashboard-panel').style.display = 'block';
+                updateAdminDashboard(); // 로그인 성공 시 대시보드 업데이트
+            } else {
+                showCustomAlert('잘못된 비밀번호입니다.');
+                passwordInput.value = '';
+            }
+        }
+
+        async function updateAdminDashboard() {
+            if (!db || !ratingsCollection || !exclusionsCollection) {
+                console.warn("Firestore collections not initialized for admin dashboard.");
+                return;
+            }
+
+            const adminMealRatingsSummary = document.getElementById('admin-meal-ratings-summary');
+            adminMealRatingsSummary.innerHTML = '';
+
+            const mealTimes = [{
+                key: 'breakfast',
+                label: '🌅 아침'
+            }, {
+                key: 'lunch',
+                label: '🍽️ 점심'
+            }, {
+                key: 'dinner',
+                label: '🌙 저녁'
+            }];
+
+            // 식사 평가 요약 업데이트
+            for (const mealTimeData of mealTimes) {
+                const mealTimeDiv = document.createElement('div');
+                mealTimeDiv.classList.add('admin-section'); // admin-sub-section 대신 admin-section 사용
+                const mealTimeHeader = document.createElement('h4');
+                mealTimeHeader.textContent = mealTimeData.label;
+                mealTimeDiv.appendChild(mealTimeHeader);
+
+                const ul = document.createElement('ul');
+                let hasRatings = false;
+
+                // 하드코딩된 메뉴 목록 (실제 앱에서는 Firestore에서 메뉴 자체를 관리하는 것이 좋음)
+                const staticMenuItems = {
+                    breakfast: ["네코맘마덮밥", "비스킷", "삼치데리야끼구이", "시리얼&우유"],
+                    lunch: ["목살필라프", "차지키샐러드", "장각치킨구이", "복숭아"],
+                    dinner: ["구운주먹밥", "해물찌개", "돈파이", "쿨피스", "방울토마토"]
+                };
+
+                const menuItemsForTime = staticMenuItems[mealTimeData.key] || [];
+                if (menuItemsForTime.length === 0) {
+                    const p = document.createElement('p');
+                    p.textContent = '등록된 메뉴가 없습니다.';
+                    mealTimeDiv.appendChild(p);
+                    adminMealRatingsSummary.appendChild(mealTimeDiv);
+                    continue;
+                }
+
+                for (const menuName of menuItemsForTime) {
+                    try {
+                        // 모든 사용자의 해당 메뉴 평가를 쿼리
+                        const q = query(ratingsCollection,
+                            where("mealTime", "==", mealTimeData.key),
+                            where("menuName", "==", menuName)
+                        );
+                        const querySnapshot = await getDocs(q);
+
+                        let totalRating = 0;
+                        let numberOfRatings = 0;
+                        querySnapshot.forEach((doc) => {
+                            totalRating += doc.data().value;
+                            numberOfRatings++;
+                        });
+
+                        const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
+
+                        const li = document.createElement('li');
+                        li.textContent = `${menuName}: 평균 ${average.toFixed(1)}점 (${numberOfRatings}명 평가)`;
+                        ul.appendChild(li);
+                        if (numberOfRatings > 0) hasRatings = true;
+                    } catch (e) {
+                        console.error(`Error fetching ratings for ${menuName}:`, e);
+                    }
+                }
+
+                if (!hasRatings) {
+                    const p = document.createElement('p');
+                    p.textContent = '아직 평가된 메뉴가 없습니다.';
+                    mealTimeDiv.appendChild(p);
+                } else {
+                    mealTimeDiv.appendChild(ul);
+                }
+                adminMealRatingsSummary.appendChild(mealTimeDiv);
+            }
+
+            // 식사 제외 신청 현황 (내일) 업데이트
+            const adminExclusionList = document.getElementById('admin-exclusion-list');
+            adminExclusionList.innerHTML = '';
+
+            const tomorrowDate = getTomorrowDateString();
+            try {
+                // 내일의 모든 제외 신청을 가져옴 (사용자 필터 없음)
+                const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
+                const allExclusionsSnapshot = await getDocs(allExclusionsQuery);
+
+                const groupedExclusions = {
+                    'breakfast': [],
+                    'lunch': [],
+                    'dinner': []
+                };
+
+                allExclusionsSnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (groupedExclusions[data.mealType]) {
+                        groupedExclusions[data.mealType].push(data);
+                    }
+                });
+
+                mealTimes.forEach(category => {
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.classList.add('admin-section');
+                    const categoryHeader = document.createElement('h4');
+                    categoryHeader.textContent = `${category.label} 제외 학생`;
+                    categoryDiv.appendChild(categoryHeader);
+
+                    const entriesForCategory = groupedExclusions[category.key];
+                    if (entriesForCategory.length > 0) {
+                        const ul = document.createElement('ul');
+                        entriesForCategory.forEach(entry => {
+                            entry.students.forEach(student => {
+                                const li = document.createElement('li');
+                                li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
+                                ul.appendChild(li);
+                            });
+                        });
+                        categoryDiv.appendChild(ul);
+                    } else {
+                        const noEntryMessage = document.createElement('p');
+                        noEntryMessage.textContent = '제외 신청 학생이 없습니다.';
+                        categoryDiv.appendChild(noEntryMessage);
+                    }
+                    adminExclusionList.appendChild(categoryDiv);
+                });
+            } catch (e) {
+                console.error("Error fetching admin exclusions:", e);
+                adminExclusionList.innerHTML = '<p>제외 신청 목록을 불러오는 데 실패했습니다.</p>';
+            }
+        }
+
+        function printAdminSummary() {
+            // 인쇄 기능 (브라우저 기본 인쇄 대화 상자 사용)
+            window.print();
+        }
+
+        // 30초마다 급식 상태 랜덤 업데이트 (데모용)
+        setInterval(() => {
+            const statusElements = document.querySelectorAll('.meal-status');
+            const statuses = ['status-available', 'status-low', 'status-soldout'];
+            const statusTexts = ['충분함', '부족함', '매진'];
+
+            statusElements.forEach(element => {
+                const randomIndex = Math.floor(Math.random() * 3);
+                element.className = `meal-status ${statuses[randomIndex]}`;
+                element.textContent = statusTexts[randomIndex];
+            });
+        }, 30000);
     </script>
 
     <style>
@@ -698,6 +1357,10 @@
             margin-top: 0;
         }
 
+        .admin-login-card .btn:hover {
+            background: #45a049;
+        }
+
         .admin-dashboard-card {
             background: #fff;
             border-radius: 12px;
@@ -1072,728 +1735,6 @@
             <button class="btn" onclick="document.getElementById('custom-alert-modal').style.display = 'none'" style="margin-top: 20px; width: 100px;">확인</button>
         </div>
     </div>
-
-    <script type="text/javascript">
-        // 전역 변수들 (Firebase 초기화 스크립트에서 window에 노출된 변수들을 사용)
-        let db;
-        let auth;
-        let getUserId; // 함수로 userId를 가져옴
-        let ratingsCollection;
-        let exclusionsCollection;
-
-        // --- 초기 로드 및 탭 전환 ---
-        document.addEventListener('DOMContentLoaded', () => {
-            // window에 노출된 Firebase 변수들을 가져와 사용
-            db = window.db;
-            auth = window.auth;
-            getUserId = window.getUserId;
-            ratingsCollection = window.ratingsCollection;
-            exclusionsCollection = window.exclusionsCollection;
-
-            // 탭 전환 기능
-            const navTabs = document.querySelectorAll('.nav-tab');
-            const tabContents = document.querySelectorAll('.tab-content');
-
-            window.showTab = function (tabId) {
-                navTabs.forEach(tab => tab.classList.remove('active'));
-                tabContents.forEach(content => content.classList.remove('active'));
-
-                document.querySelector(`.nav-tab[onclick="showTab('${tabId}')"]`).classList.add('active');
-                document.getElementById(tabId).classList.add('active');
-
-                // 관리자 탭으로 전환 시 대시보드 업데이트 시도
-                if (tabId === 'admin' && document.getElementById('admin-dashboard-panel').style.display === 'block') {
-                    updateAdminDashboard();
-                }
-            };
-
-            // 초기 로드 시 첫 번째 탭 활성화 (Firebase 초기화 스크립트에서 이미 호출됨)
-            // initStarRatings();
-            // updateReservationDeadlines();
-            // updateExclusionSummary();
-
-            // 30초마다 급식 상태 랜덤 업데이트 (데모용)
-            setInterval(() => {
-                const statusElements = document.querySelectorAll('.meal-status');
-                const statuses = ['status-available', 'status-low', 'status-soldout'];
-                const statusTexts = ['충분함', '부족함', '매진'];
-
-                statusElements.forEach(element => {
-                    const randomIndex = Math.floor(Math.random() * 3);
-                    element.className = `meal-status ${statuses[randomIndex]}`;
-                    element.textContent = statusTexts[randomIndex];
-                });
-            }, 30000);
-        });
-
-
-        // --- 커스텀 알림 모달 ---
-        function showCustomAlert(message) {
-            const alertModal = document.getElementById('custom-alert-modal');
-            const alertMessage = document.getElementById('custom-alert-message');
-            alertMessage.textContent = message;
-            alertModal.style.display = 'flex';
-        }
-
-
-        // --- 날짜 및 시간 관련 헬퍼 함수 ---
-        function getTomorrowDateString() {
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            const year = tomorrow.getFullYear();
-            const month = (tomorrow.getMonth() + 1).toString().padStart(2, '0');
-            const day = tomorrow.getDate().toString().padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
-
-        function getMealTypeName(mealType) {
-            switch (mealType) {
-                case 'breakfast':
-                    return '아침';
-                case 'lunch':
-                    return '점심';
-                case 'dinner':
-                    return '저녁';
-                default:
-                    return '';
-            }
-        }
-
-
-        // --- 식사 메뉴 탭 (평가 기능) ---
-
-        // 별점 시각적 업데이트 함수
-        function updateStarDisplay(stars, ratingValue) {
-            stars.forEach((star, index) => {
-                const starValue = index + 1;
-                if (ratingValue >= starValue) {
-                    star.classList.add('full');
-                    star.classList.remove('half');
-                } else if (ratingValue > index && ratingValue < starValue) {
-                    star.classList.add('half');
-                    star.classList.remove('full');
-                } else {
-                    star.classList.remove('full');
-                    star.classList.remove('half');
-                }
-            });
-        }
-
-        // 특정 메뉴 항목의 평균 평가를 Firestore에서 가져와 UI 업데이트
-        async function updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan) {
-            if (!ratingsCollection) {
-                console.warn("Firestore ratingsCollection not initialized yet.");
-                return;
-            }
-            try {
-                // 해당 메뉴 항목에 대한 모든 평가를 Firestore에서 쿼리
-                const q = window.query(ratingsCollection,
-                    window.where("mealTime", "==", mealTime),
-                    window.where("menuName", "==", menuName)
-                );
-
-                const querySnapshot = await window.getDocs(q);
-                let totalRating = 0;
-                let numberOfRatings = 0;
-                querySnapshot.forEach((doc) => {
-                    totalRating += doc.data().value;
-                    numberOfRatings++;
-                });
-
-                const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
-
-                updateStarDisplay(stars, average);
-                ratingValueSpan.textContent = average.toFixed(1);
-
-            } catch (e) {
-                console.error("Error updating menu item rating display:", e);
-            }
-        }
-
-        // 별점 클릭 이벤트 핸들러 (Firestore에 평가 저장)
-        async function handleStarClick(event) {
-            const userId = getUserId();
-            if (!userId || !ratingsCollection) {
-                showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
-                return;
-            }
-
-            const star = event.target;
-            const ratingDiv = star.closest('.star-rating');
-            const mealTime = ratingDiv.dataset.mealTime;
-            const menuName = ratingDiv.dataset.menuName;
-
-            const rect = star.getBoundingClientRect();
-            const clickX = event.clientX - rect.left;
-            const starWidth = rect.width;
-            // 반 별점 허용 (클릭 위치에 따라 0.5점 단위로)
-            const value = clickX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
-
-            // 사용자별, 메뉴별 고유한 문서 ID 생성
-            const ratingDocId = `${userId}_${mealTime}_${menuName}`;
-            const docRef = window.doc(ratingsCollection, ratingDocId);
-
-            try {
-                // setDoc을 사용하여 문서 생성 또는 업데이트
-                await window.setDoc(docRef, {
-                    userId: userId,
-                    mealTime: mealTime,
-                    menuName: menuName,
-                    value: value,
-                    timestamp: new Date()
-                });
-                console.log("Rating saved successfully!");
-                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
-            } catch (e) {
-                console.error("Error adding/updating rating: ", e);
-                showCustomAlert("평가 저장 중 오류가 발생했습니다.");
-            }
-        }
-
-        // 별점 초기화 및 이벤트 리스너 설정
-        function initStarRatings() {
-            const starRatings = document.querySelectorAll('.star-rating');
-            starRatings.forEach(ratingDiv => {
-                const mealTime = ratingDiv.dataset.mealTime;
-                const menuName = ratingDiv.dataset.menuName;
-                const stars = ratingDiv.querySelectorAll('.star');
-                const ratingValueSpan = ratingDiv.querySelector('.rating-value');
-
-                // 초기 로드 시 평가 표시
-                updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
-
-                // 별점 클릭 이벤트 리스너 추가
-                stars.forEach((star) => {
-                    star.removeEventListener('click', handleStarClick); // 중복 방지
-                    star.addEventListener('click', handleStarClick);
-                    star.removeEventListener('mouseenter', handleStarHover);
-                    star.addEventListener('mouseenter', handleStarHover);
-                });
-
-                // 마우스가 별점 영역을 벗어났을 때 원래 평가로 돌아가기
-                ratingDiv.removeEventListener('mouseleave', handleStarMouseLeave);
-                ratingDiv.addEventListener('mouseleave', handleStarMouseLeave);
-            });
-        }
-
-        // 별점 마우스 오버 시 시각적 효과
-        function handleStarHover(e) {
-            const star = e.target;
-            const ratingDiv = star.closest('.star-rating');
-            const stars = ratingDiv.querySelectorAll('.star');
-            const rect = star.getBoundingClientRect();
-            const hoverX = e.clientX - rect.left;
-            const starWidth = rect.width;
-            const hoverValue = hoverX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
-            updateStarDisplay(stars, hoverValue);
-        }
-
-        // 별점 마우스 리브 시 원래 평가로 복원
-        function handleStarMouseLeave(e) {
-            const ratingDiv = e.target;
-            const mealTime = ratingDiv.dataset.mealTime;
-            const menuName = ratingDiv.dataset.menuName;
-            const stars = ratingDiv.querySelectorAll('.star');
-            const ratingValueSpan = ratingDiv.querySelector('.rating-value');
-            updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
-        }
-
-
-        // --- 식사 예약 탭 (제외 신청 기능) ---
-
-        const mealDeadlines = {
-            breakfast: "00:00", // 자정
-            lunch: "09:00", // 오전 9시
-            dinner: "15:30" // 오후 3시 30분
-        };
-
-        function updateReservationDeadlines() {
-            const now = new Date();
-            const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1); // 내일 날짜
-
-            document.getElementById('deadline-breakfast').textContent = mealDeadlines.breakfast;
-            document.getElementById('deadline-lunch').textContent = mealDeadlines.lunch;
-            document.getElementById('deadline-dinner').textContent = mealDeadlines.dinner;
-
-            const reservationButton = document.getElementById('reservation-button');
-            let isPastDeadline = false;
-
-            for (const mealType in mealDeadlines) {
-                const deadlineTime = mealDeadlines[mealType];
-                const [deadlineHour, deadlineMinute] = deadlineTime.split(':').map(Number);
-
-                const deadlineDate = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), deadlineHour, deadlineMinute, 0, 0);
-
-                if (now > deadlineDate) {
-                    isPastDeadline = true;
-                    break;
-                }
-            }
-
-            if (isPastDeadline) {
-                reservationButton.classList.add('disabled');
-                reservationButton.textContent = '식사 제외 신청 마감';
-            } else {
-                reservationButton.classList.remove('disabled');
-                reservationButton.textContent = '식사 제외 신청';
-            }
-        }
-
-        let currentModalMode = 'add'; // 'add' 또는 'edit'
-        let currentMealTypeBeingEdited = null; // 수정 중인 식사 유형
-
-        function openExclusionModal() {
-            const reservationButton = document.getElementById('reservation-button');
-            if (reservationButton.classList.contains('disabled')) {
-                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
-                return;
-            }
-
-            currentModalMode = 'add';
-            document.getElementById('modal-title').textContent = '식사 제외 신청';
-            const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = ''; // 기존 항목 초기화
-            addExclusionEntry(); // 기본 항목 하나 추가
-            document.getElementById('exclusionModal').style.display = 'flex';
-        }
-
-        async function openExclusionModalForEdit(mealTypeToEdit) {
-            const reservationButton = document.getElementById('reservation-button');
-            if (reservationButton.classList.contains('disabled')) {
-                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
-                return;
-            }
-
-            currentModalMode = 'edit';
-            currentMealTypeBeingEdited = mealTypeToEdit;
-            document.getElementById('modal-title').textContent = `${getMealTypeName(mealTypeToEdit)} 식사 제외 수정`;
-
-            const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = '';
-
-            const userId = getUserId();
-            if (!userId || !exclusionsCollection) {
-                showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
-                return;
-            }
-
-            const tomorrowDate = getTomorrowDateString();
-            try {
-                const q = window.query(exclusionsCollection,
-                    window.where("date", "==", tomorrowDate),
-                    window.where("userId", "==", userId),
-                    window.where("mealType", "==", mealTypeToEdit)
-                );
-                const querySnapshot = await window.getDocs(q);
-
-                if (!querySnapshot.empty) {
-                    querySnapshot.forEach(doc => {
-                        const data = doc.data();
-                        addExclusionEntry(data.mealType, data.reason, data.students);
-                    });
-                } else {
-                    addExclusionEntry(mealTypeToEdit); // 기존 신청이 없으면 빈 항목 추가
-                }
-            } catch (e) {
-                console.error("Error loading exclusions for edit:", e);
-                showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
-            }
-
-            document.getElementById('exclusionModal').style.display = 'flex';
-        }
-
-        function closeExclusionModal() {
-            document.getElementById('exclusionModal').style.display = 'none';
-        }
-
-        function addExclusionEntry(mealType = '', reason = '', students = []) {
-            const container = document.getElementById('exclusion-entries-container');
-            const entryCount = container.querySelectorAll('.exclusion-entry').length;
-            const newEntry = document.createElement('div');
-            newEntry.classList.add('exclusion-entry');
-            newEntry.innerHTML = `
-                <button type="button" class="remove-entry-btn" onclick="removeExclusionEntry(this)">&times;</button>
-                <div class="form-group">
-                    <label for="modal-meal-type-${entryCount}">식사 선택:</label>
-                    <select id="modal-meal-type-${entryCount}">
-                        <option value="">선택하세요</option>
-                        <option value="breakfast">아침</option>
-                        <option value="lunch">점심</option>
-                        <option value="dinner">저녁</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="modal-reason-${entryCount}">제외 이유:</label>
-                    <textarea id="modal-reason-${entryCount}" placeholder="예: 회식, 외출, 병원 방문 등"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="modal-students-${entryCount}">제외 학생 (한 줄에 한 명씩):</label>
-                    <textarea id="modal-students-${entryCount}" placeholder="예:&#10;1206 김상윤&#10;1207 김시우"></textarea>
-                </div>
-            `;
-            container.appendChild(newEntry);
-
-            // 값 채우기 (수정 모드용)
-            if (mealType) {
-                newEntry.querySelector(`select`).value = mealType;
-            }
-            if (reason) {
-                newEntry.querySelector(`textarea[id^="modal-reason-"]`).value = reason;
-            }
-            if (students.length > 0) {
-                newEntry.querySelector(`textarea[id^="modal-students-"]`).value = students.join('\n');
-            }
-        }
-
-        function removeExclusionEntry(button) {
-            const entryElement = button.closest('.exclusion-entry');
-            entryElement.remove();
-        }
-
-        async function saveExclusions() {
-            const userId = getUserId();
-            if (!userId || !exclusionsCollection) {
-                showCustomAlert("데이터를 저장할 수 없습니다. 사용자 인증 상태를 확인하거나 잠시 후 다시 시도해주세요.");
-                return;
-            }
-
-            const container = document.getElementById('exclusion-entries-container');
-            const entriesInModal = container.querySelectorAll('.exclusion-entry');
-            const newOrEditedExclusions = [];
-            let isValid = true;
-
-            entriesInModal.forEach(entryElement => {
-                const mealTypeSelect = entryElement.querySelector('select');
-                const mealType = mealTypeSelect.value;
-                const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
-                const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
-
-                const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
-
-                if (!mealType) {
-                    isValid = false;
-                    showCustomAlert('모든 제외 항목의 식사를 선택해주세요.');
-                    return;
-                }
-                if (students.length === 0) {
-                    isValid = false;
-                    showCustomAlert('모든 제외 항목에 학번 이름을 최소 한 명 이상 입력해주세요.');
-                    return;
-                }
-                if (!reason) {
-                    isValid = false;
-                    showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
-                    return;
-                }
-
-                newOrEditedExclusions.push({
-                    mealType: mealType,
-                    reason: reason,
-                    students: students
-                });
-            });
-
-            if (!isValid) {
-                return;
-            }
-
-            try {
-                const tomorrowDate = getTomorrowDateString();
-
-                // 현재 사용자의 내일 제외 신청을 모두 삭제
-                const existingExclusionsQuery = window.query(exclusionsCollection,
-                    window.where("date", "==", tomorrowDate),
-                    window.where("userId", "==", userId)
-                );
-                const existingExclusionsSnapshot = await window.getDocs(existingExclusionsQuery);
-                const deletePromises = [];
-                existingExclusionsSnapshot.forEach((doc) => {
-                    deletePromises.push(window.deleteDoc(doc.ref));
-                });
-                await Promise.all(deletePromises);
-
-                // 새로운 또는 수정된 제외 신청을 추가
-                const addPromises = [];
-                newOrEditedExclusions.forEach(exclusion => {
-                    addPromises.push(window.addDoc(exclusionsCollection, {
-                        userId: userId,
-                        mealType: exclusion.mealType,
-                        reason: exclusion.reason,
-                        students: exclusion.students,
-                        date: tomorrowDate,
-                        timestamp: new Date()
-                    }));
-                });
-                await Promise.all(addPromises);
-
-                closeExclusionModal();
-                showCustomAlert('식사 제외 신청이 저장되었습니다.');
-                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
-
-            } catch (e) {
-                console.error("Error saving exclusions: ", e);
-                showCustomAlert('식사 제외 신청 저장 중 오류가 발생했습니다.');
-            }
-        }
-
-        // 식사 제외 신청 요약 업데이트
-        async function updateExclusionSummary() {
-            const summaryContainer = document.getElementById('exclusion-summary-list');
-            summaryContainer.innerHTML = '';
-
-            const userId = getUserId();
-            if (!userId || !exclusionsCollection) {
-                document.getElementById('exclusion-summary-card').style.display = 'none';
-                return;
-            }
-
-            const tomorrowDate = getTomorrowDateString();
-
-            try {
-                // 현재 사용자의 내일 제외 신청만 가져옴
-                const q = window.query(exclusionsCollection,
-                    window.where("date", "==", tomorrowDate),
-                    window.where("userId", "==", userId)
-                );
-
-                const querySnapshot = await window.getDocs(q);
-
-                const groupedExclusions = {
-                    'breakfast': [],
-                    'lunch': [],
-                    'dinner': []
-                };
-
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    if (groupedExclusions[data.mealType]) {
-                        groupedExclusions[data.mealType].push(data);
-                    }
-                });
-
-                const mealCategories = [{
-                    key: 'breakfast',
-                    label: '🌅 아침'
-                }, {
-                    key: 'lunch',
-                    label: '🍽️ 점심'
-                }, {
-                    key: 'dinner',
-                    label: '🌙 저녁'
-                }];
-
-                let hasAnyExclusion = false;
-                mealCategories.forEach(category => {
-                    const categoryDiv = document.createElement('div');
-                    categoryDiv.classList.add('exclusion-summary-category');
-
-                    const categoryHeader = document.createElement('h4');
-                    categoryHeader.textContent = category.label;
-
-                    const editButton = document.createElement('button');
-                    editButton.classList.add('edit-summary-btn');
-                    editButton.textContent = '수정하기';
-                    editButton.onclick = () => openExclusionModalForEdit(category.key);
-                    categoryHeader.appendChild(editButton);
-
-                    categoryDiv.appendChild(categoryHeader);
-
-                    const entriesForCategory = groupedExclusions[category.key];
-                    if (entriesForCategory.length > 0) {
-                        hasAnyExclusion = true;
-                        entriesForCategory.forEach(entry => {
-                            const summaryItem = document.createElement('div');
-                            summaryItem.classList.add('exclusion-summary-item');
-
-                            const studentNamesList = entry.students.map(s => `<li>${s}</li>`).join('');
-
-                            summaryItem.innerHTML = `
-                                <strong>제외 학생: (${entry.students.length}명)</strong>
-                                <ul>
-                                    ${studentNamesList}
-                                </ul>
-                                <p>이유: ${entry.reason}</p>
-                            `;
-                            categoryDiv.appendChild(summaryItem);
-                        });
-                    } else {
-                        const noEntryMessage = document.createElement('p');
-                        noEntryMessage.classList.add('no-exclusion-message');
-                        noEntryMessage.textContent = '신청 내역이 없습니다.';
-                        categoryDiv.appendChild(noEntryMessage);
-                    }
-                    summaryContainer.appendChild(categoryDiv);
-                });
-
-                document.getElementById('exclusion-summary-card').style.display = 'block'; // 신청 내역이 있든 없든 카드는 항상 표시
-
-            } catch (e) {
-                console.error("Error updating exclusion summary:", e);
-                document.getElementById('exclusion-summary-card').style.display = 'none'; // 오류 시 숨김
-            }
-        }
-
-
-        // --- 관리자 탭 ---
-
-        const ADMIN_PASSWORD = "admin"; // 실제 서비스에서는 더 안전한 방법 사용
-
-        function adminLogin() {
-            const passwordInput = document.getElementById('admin-password');
-            if (passwordInput.value === ADMIN_PASSWORD) {
-                document.getElementById('admin-login-panel').style.display = 'none';
-                document.getElementById('admin-dashboard-panel').style.display = 'block';
-                updateAdminDashboard(); // 로그인 성공 시 대시보드 업데이트
-            } else {
-                showCustomAlert('잘못된 비밀번호입니다.');
-                passwordInput.value = '';
-            }
-        }
-
-        async function updateAdminDashboard() {
-            if (!db || !ratingsCollection || !exclusionsCollection) {
-                console.warn("Firestore collections not initialized for admin dashboard.");
-                return;
-            }
-
-            const adminMealRatingsSummary = document.getElementById('admin-meal-ratings-summary');
-            adminMealRatingsSummary.innerHTML = '';
-
-            const mealTimes = [{
-                key: 'breakfast',
-                label: '🌅 아침'
-            }, {
-                key: 'lunch',
-                label: '🍽️ 점심'
-            }, {
-                key: 'dinner',
-                label: '🌙 저녁'
-            }];
-
-            // 식사 평가 요약 업데이트
-            for (const mealTimeData of mealTimes) {
-                const mealTimeDiv = document.createElement('div');
-                mealTimeDiv.classList.add('admin-section'); // admin-sub-section 대신 admin-section 사용
-                const mealTimeHeader = document.createElement('h4');
-                mealTimeHeader.textContent = mealTimeData.label;
-                mealTimeDiv.appendChild(mealTimeHeader);
-
-                const ul = document.createElement('ul');
-                let hasRatings = false;
-
-                // 하드코딩된 메뉴 목록 (실제 앱에서는 Firestore에서 메뉴 자체를 관리하는 것이 좋음)
-                const staticMenuItems = {
-                    breakfast: ["네코맘마덮밥", "비스킷", "삼치데리야끼구이", "시리얼&우유"],
-                    lunch: ["목살필라프", "차지키샐러드", "장각치킨구이", "복숭아"],
-                    dinner: ["구운주먹밥", "해물찌개", "돈파이", "쿨피스", "방울토마토"]
-                };
-
-                const menuItemsForTime = staticMenuItems[mealTimeData.key] || [];
-                if (menuItemsForTime.length === 0) {
-                    const p = document.createElement('p');
-                    p.textContent = '등록된 메뉴가 없습니다.';
-                    mealTimeDiv.appendChild(p);
-                    adminMealRatingsSummary.appendChild(mealTimeDiv);
-                    continue;
-                }
-
-                for (const menuName of menuItemsForTime) {
-                    try {
-                        // 모든 사용자의 해당 메뉴 평가를 쿼리
-                        const q = window.query(ratingsCollection,
-                            window.where("mealTime", "==", mealTimeData.key),
-                            window.where("menuName", "==", menuName)
-                        );
-                        const querySnapshot = await window.getDocs(q);
-
-                        let totalRating = 0;
-                        let numberOfRatings = 0;
-                        querySnapshot.forEach((doc) => {
-                            totalRating += doc.data().value;
-                            numberOfRatings++;
-                        });
-
-                        const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
-
-                        const li = document.createElement('li');
-                        li.textContent = `${menuName}: 평균 ${average.toFixed(1)}점 (${numberOfRatings}명 평가)`;
-                        ul.appendChild(li);
-                        if (numberOfRatings > 0) hasRatings = true;
-                    } catch (e) {
-                        console.error(`Error fetching ratings for ${menuName}:`, e);
-                    }
-                }
-
-                if (!hasRatings) {
-                    const p = document.createElement('p');
-                    p.textContent = '아직 평가된 메뉴가 없습니다.';
-                    mealTimeDiv.appendChild(p);
-                } else {
-                    mealTimeDiv.appendChild(ul);
-                }
-                adminMealRatingsSummary.appendChild(mealTimeDiv);
-            }
-
-            // 식사 제외 신청 현황 (내일) 업데이트
-            const adminExclusionList = document.getElementById('admin-exclusion-list');
-            adminExclusionList.innerHTML = '';
-
-            const tomorrowDate = getTomorrowDateString();
-            try {
-                // 내일의 모든 제외 신청을 가져옴 (사용자 필터 없음)
-                const allExclusionsQuery = window.query(exclusionsCollection, window.where("date", "==", tomorrowDate));
-                const allExclusionsSnapshot = await window.getDocs(allExclusionsQuery);
-
-                const groupedExclusions = {
-                    'breakfast': [],
-                    'lunch': [],
-                    'dinner': []
-                };
-
-                allExclusionsSnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    if (groupedExclusions[data.mealType]) {
-                        groupedExclusions[data.mealType].push(data);
-                    }
-                });
-
-                mealTimes.forEach(category => {
-                    const categoryDiv = document.createElement('div');
-                    categoryDiv.classList.add('admin-section');
-                    const categoryHeader = document.createElement('h4');
-                    categoryHeader.textContent = `${category.label} 제외 학생`;
-                    categoryDiv.appendChild(categoryHeader);
-
-                    const entriesForCategory = groupedExclusions[category.key];
-                    if (entriesForCategory.length > 0) {
-                        const ul = document.createElement('ul');
-                        entriesForCategory.forEach(entry => {
-                            entry.students.forEach(student => {
-                                const li = document.createElement('li');
-                                li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
-                                ul.appendChild(li);
-                            });
-                        });
-                        categoryDiv.appendChild(ul);
-                    } else {
-                        const noEntryMessage = document.createElement('p');
-                        noEntryMessage.textContent = '제외 신청 학생이 없습니다.';
-                        categoryDiv.appendChild(noEntryMessage);
-                    }
-                    adminExclusionList.appendChild(categoryDiv);
-                });
-            } catch (e) {
-                console.error("Error fetching admin exclusions:", e);
-                adminExclusionList.innerHTML = '<p>제외 신청 목록을 불러오는 데 실패했습니다.</p>';
-            }
-        }
-
-        function printAdminSummary() {
-            // 인쇄 기능 (브라우저 기본 인쇄 대화 상자 사용)
-            window.print();
-        }
-    </script>
 </body>
 
 </html>
