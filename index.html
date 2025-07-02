@@ -1,1 +1,1799 @@
+<!DOCTYPE html>
+<html lang="ko">
 
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>급식 매니저 - 스마트 급식 시스템</title>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Firebase 앱 및 Firestore 관련 모듈 가져오기
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Canvas 환경에서 제공되는 전역 변수들
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app;
+        let db;
+        let auth;
+        let currentUserId = null; // 현재 사용자 ID (인증 후 설정됨)
+
+        let ratingsCollection;
+        let exclusionsCollection;
+
+        // Firebase 및 Firestore 초기화 함수
+        async function initializeFirebaseAndFirestore() {
+            try {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // 사용자 인증 (초기 토큰이 있으면 사용, 없으면 익명 로그인)
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // 인증 상태 변화 감지
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                    } else {
+                        // 사용자가 없을 경우 익명 ID 생성 (다중 사용자 앱이므로 고유 ID 필요)
+                        currentUserId = crypto.randomUUID();
+                    }
+                    console.log("Firebase initialized and user authenticated:", currentUserId);
+
+                    // 사용자 ID를 UI에 표시
+                    const userIdDisplay = document.getElementById('user-id-display');
+                    if (userIdDisplay) {
+                        userIdDisplay.textContent = `사용자 ID: ${currentUserId}`;
+                    }
+
+                    // 컬렉션 참조 설정 (public/data 경로 사용)
+                    ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
+                    exclusionsCollection = collection(db, `artifacts/${appId}/public/data/exclusions`);
+
+                    // 초기 데이터 로드 및 실시간 리스너 설정
+                    initStarRatings(); // 별점 초기화 및 실시간 리스너 설정
+                    updateReservationDeadlines(); // 예약 마감 시간 업데이트
+                    updateExclusionSummary(); // 제외 신청 요약 업데이트
+
+                    // 모든 제외 신청에 대한 실시간 리스너 (관리자 대시보드 및 요약 업데이트용)
+                    const tomorrowDate = getTomorrowDateString();
+                    const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
+
+                    onSnapshot(allExclusionsQuery, (snapshot) => {
+                        console.log("Exclusions data changed, updating UI...");
+                        updateExclusionSummary(); // 현재 사용자의 요약 업데이트
+                        if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
+                            updateAdminDashboard(); // 관리자 대시보드 업데이트
+                        }
+                    }, (error) => {
+                        console.error("Error listening to exclusions:", error);
+                    });
+
+                    // 모든 평가에 대한 실시간 리스너 (관리자 대시보드 및 메뉴 평가 업데이트용)
+                    onSnapshot(ratingsCollection, (snapshot) => {
+                        console.log("Ratings data changed, updating UI...");
+                        // 모든 메뉴 항목의 평가를 다시 계산하고 표시
+                        document.querySelectorAll('.menu-item').forEach(item => {
+                            const mealTime = item.dataset.mealTime;
+                            const menuName = item.querySelector('.menu-name').dataset.menuName;
+                            const starsDiv = item.querySelector('.star-rating');
+                            const ratingValueSpan = starsDiv.querySelector('.rating-value');
+                            updateMenuItemRatingDisplay(mealTime, menuName, starsDiv.querySelectorAll('.star'), ratingValueSpan);
+                        });
+                        if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
+                            updateAdminDashboard(); // 관리자 대시보드 업데이트
+                        }
+                    }, (error) => {
+                        console.error("Error listening to ratings:", error);
+                    });
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase or Firestore:", error);
+                const appContainer = document.querySelector('.app-container');
+                const errorDiv = document.createElement('div');
+                errorDiv.style.padding = '20px';
+                errorDiv.style.backgroundColor = '#f8d7da';
+                errorDiv.style.color = '#721c24';
+                errorDiv.style.border = '1px solid #f5c6cb';
+                errorDiv.style.borderRadius = '5px';
+                errorDiv.style.margin = '20px';
+                errorDiv.textContent = '앱 초기화 중 오류가 발생했습니다. 인터넷 연결을 확인하거나 나중에 다시 시도해주세요.';
+                appContainer.prepend(errorDiv);
+            }
+        }
+
+        // DOM 로드 후 Firebase 초기화 시작
+        document.addEventListener('DOMContentLoaded', initializeFirebaseAndFirestore);
+
+        // 전역 스크립트에서 접근할 수 있도록 window 객체에 노출
+        window.db = db;
+        window.auth = auth;
+        window.getUserId = () => currentUserId; // 현재 userId를 가져오는 함수
+        window.ratingsCollection = ratingsCollection;
+        window.exclusionsCollection = exclusionsCollection;
+        window.initializeApp = initializeApp; // initializeApp도 노출
+        window.getFirestore = getFirestore; // getFirestore도 노출
+        window.collection = collection; // collection도 노출
+        window.addDoc = addDoc; // addDoc도 노출
+        window.setDoc = setDoc; // setDoc도 노출
+        window.updateDoc = updateDoc; // updateDoc도 노출
+        window.deleteDoc = deleteDoc; // deleteDoc도 노출
+        window.onSnapshot = onSnapshot; // onSnapshot도 노출
+        window.query = query; // query도 노출
+        window.where = where; // where도 노출
+        window.getDocs = getDocs; // getDocs도 노출
+    </script>
+
+    <style>
+        /* 기존 CSS는 변경 없이 유지합니다. */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .app-container {
+            max-width: 400px;
+            width: 100%;
+            margin: 0 auto;
+            background: white;
+            min-height: 100vh;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            position: relative;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+
+        .header h1 {
+            font-size: 1.8em;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        .user-id-display {
+            font-size: 0.7em;
+            margin-top: 10px;
+            opacity: 0.8;
+        }
+
+        .nav-tabs {
+            display: flex;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .nav-tab {
+            flex: 1;
+            padding: 15px 10px;
+            text-align: center;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            color: #666;
+        }
+
+        .nav-tab.active {
+            background: white;
+            color: #4CAF50;
+            border-bottom: 2px solid #4CAF50;
+        }
+
+        .tab-content {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .meal-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border-left: 4px solid #4CAF50;
+        }
+
+        .meal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .meal-date {
+            font-weight: bold;
+            color: #333;
+            font-size: 16px;
+        }
+
+        .meal-status {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-available {
+            background: #e8f5e8;
+            color: #4CAF50;
+        }
+
+        .status-low {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-soldout {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .menu-item:last-child {
+            border-bottom: none;
+        }
+
+        .menu-info {
+            flex: 1;
+        }
+
+        .menu-name {
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+
+        .star-rating {
+            display: flex;
+            gap: 2px;
+            align-items: center;
+        }
+
+        .star {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            position: relative;
+            color: #ddd;
+            transition: color 0.2s;
+        }
+
+        .star:before {
+            content: '★';
+            font-size: 18px;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        .star.full {
+            color: #ffc107;
+        }
+
+        .star.half {
+            background: linear-gradient(90deg, #ffc107 50%, #ddd 50%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .star.half:before {
+            background: linear-gradient(90deg, #ffc107 50%, #ddd 50%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .rating-value {
+            margin-left: 8px;
+            font-size: 12px;
+            color: #666;
+            min-width: 30px;
+        }
+
+        .notification {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .meal-time-section {
+            margin-bottom: 25px;
+        }
+
+        .time-header {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            color: white;
+            padding: 12px 15px;
+            border-radius: 8px 8px 0 0;
+            font-weight: bold;
+            font-size: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .time-info {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .menu-content {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            padding: 15px;
+        }
+
+        /* 예약 관련 스타일 */
+        .reservation-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Adjusted font for the main header in reservation tab */
+        #reservation .reservation-card h3 {
+            font-size: 20px;
+            /* Adjusted size */
+            font-weight: 700;
+            /* Adjusted weight */
+            margin-bottom: 20px;
+            color: #333;
+            text-align: center;
+        }
+
+        /* Adjusted font for the summary card header */
+        #exclusion-summary-card h3 {
+            font-size: 20px;
+            /* Adjusted size */
+            font-weight: 700;
+            /* Adjusted weight */
+            margin-bottom: 15px;
+            /* Slightly less margin than modal header */
+            color: #333;
+            text-align: center;
+        }
+
+
+        .reservation-info {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+            width: 100%;
+            margin-top: 15px;
+        }
+
+        .btn:hover {
+            background: #45a049;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.6);
+            padding-top: 60px;
+            justify-content: center; /* 추가: 모달 중앙 정렬 */
+            align-items: center; /* 추가: 모달 중앙 정렬 */
+        }
+
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 500px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            position: relative;
+        }
+
+        .close-button {
+            color: #aaa;
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close-button:hover,
+        .close-button:focus {
+            color: #333;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        .modal-content h3 {
+            margin-bottom: 20px;
+            color: #333;
+            text-align: center;
+        }
+
+        .exclusion-entry {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background-color: #f9f9f9;
+        }
+
+        .exclusion-entry label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .exclusion-entry input[type="text"],
+        .exclusion-entry textarea,
+        .exclusion-entry select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .exclusion-entry select {
+            margin-bottom: 15px;
+        }
+
+        .exclusion-entry textarea {
+            resize: vertical;
+            min-height: 60px;
+        }
+
+        .exclusion-entry .remove-entry-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            float: right;
+            margin-bottom: 10px;
+        }
+
+        .exclusion-entry .remove-entry-btn:hover {
+            background: #c82333;
+        }
+
+        .add-exclusion-entry-in-modal {
+            background: #17a2b8;
+            /* Info blue */
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-top: 10px;
+            display: block;
+            /* Make it a block element to take full width or easily center */
+            width: fit-content;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .add-exclusion-entry-in-modal:hover {
+            background: #138496;
+        }
+
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* Summary card styles */
+        .exclusion-summary-category {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .exclusion-summary-category:last-of-type {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .exclusion-summary-category h4 {
+            font-size: 16px;
+            color: #4CAF50;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .exclusion-summary-item {
+            padding: 10px 0;
+            border-bottom: 1px solid #f5f5f5;
+            margin-bottom: 5px;
+            display: flex;
+            flex-direction: column;
+            /* Stack content vertically */
+        }
+
+        .exclusion-summary-item:last-child {
+            border-bottom: none;
+        }
+
+        .exclusion-summary-item strong {
+            color: #333;
+        }
+
+        .exclusion-summary-item ul {
+            list-style-type: disc;
+            padding-left: 20px;
+            margin-top: 5px;
+            font-size: 13px;
+            color: #555;
+        }
+
+        .exclusion-summary-item p {
+            margin-top: 5px;
+            font-size: 13px;
+            color: #555;
+        }
+
+        .deadline-info {
+            font-size: 13px;
+            color: #666;
+            margin-top: 10px;
+            text-align: left;
+            line-height: 1.5;
+        }
+
+        .deadline-info strong {
+            color: #333;
+        }
+
+        .edit-summary-btn {
+            background: #f0f0f0;
+            /* Light grey */
+            color: #555;
+            border: 1px solid #ccc;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+            /* Space from text */
+            flex-shrink: 0;
+            /* Don't shrink the button */
+        }
+
+        .edit-summary-btn:hover {
+            background: #e0e0e0;
+        }
+
+        .no-exclusion-message {
+            font-size: 14px;
+            color: #777;
+            text-align: center;
+            padding: 10px 0;
+        }
+
+        /* Admin Tab Styles */
+        .admin-login-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .admin-login-card h3 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .admin-login-card input[type="password"] {
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            text-align: center;
+        }
+
+        .admin-login-card .btn {
+            width: auto;
+            padding: 10px 30px;
+            margin-top: 0;
+        }
+
+        .admin-dashboard-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .admin-dashboard-card h3 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #333;
+            text-align: center;
+        }
+
+        .admin-section {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .admin-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .admin-section h4 {
+            font-size: 16px;
+            color: #4CAF50;
+            margin-bottom: 10px;
+        }
+
+        .admin-section p {
+            font-size: 14px;
+            color: #555;
+            margin-bottom: 5px;
+        }
+
+        .admin-section ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+
+        .admin-section ul li {
+            background: #f8f8f8;
+            padding: 8px 12px;
+            border-radius: 5px;
+            margin-bottom: 5px;
+            font-size: 13px;
+            color: #444;
+        }
+
+        .admin-section ul li:last-child {
+            margin-bottom: 0;
+        }
+
+        .admin-section .btn-print {
+            background: #007bff;
+            /* Blue */
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-size: 13px;
+            margin-top: 10px;
+            width: auto;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .admin-section .btn-print:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app-container">
+        <div class="header">
+            <h1>🍽️ 급식 매니저</h1>
+            <p>스마트한 급식 시스템으로 더 나은 식사를</p>
+            <div id="user-id-display" class="user-id-display">사용자 ID: 로딩 중...</div>
+        </div>
+
+        <div class="nav-tabs">
+            <button class="nav-tab active" onclick="showTab('meals')">급식 메뉴</button>
+            <button class="nav-tab" onclick="showTab('reservation')">식사 제외 신청</button>
+            <button class="nav-tab" onclick="showTab('admin')">관리자</button>
+        </div>
+
+        <div id="meals" class="tab-content active">
+            <div class="meal-time-section">
+                <div class="time-header">
+                    <span>🌅 아침 급식</span>
+                </div>
+                <div class="menu-content">
+                    <div class="meal-header">
+                        <div class="meal-date">2025년 7월 3일 (목)</div>
+                    </div>
+                    <div class="menu-item" data-meal-time="breakfast">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="네코맘마덮밥">네코맘마덮밥</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="네코맘마덮밥">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="breakfast">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="비스킷">비스킷</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="비스킷">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="breakfast">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="삼치데리야끼구이">삼치데리야끼구이</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="삼치데리야끼구이">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="breakfast">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="시리얼&우유">시리얼&우유</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="breakfast" data-menu-name="시리얼&우유">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="meal-time-section">
+                <div class="time-header">
+                    <span>🍽️ 점심 급식</span>
+                </div>
+                <div class="menu-content">
+                    <div class="meal-header">
+                        <div class="meal-date">2025년 7월 3일 (목)</div>
+                    </div>
+                    <div class="menu-item" data-meal-time="lunch">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="목살필라프">목살필라프</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="lunch" data-menu-name="목살필라프">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="lunch">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="차지키샐러드">차지키샐러드</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="lunch" data-menu-name="차지키샐러드">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="lunch">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="장각치킨구이">장각치킨구이</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="lunch" data-menu-name="장각치킨구이">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="lunch">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="복숭아">복숭아</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="lunch" data-menu-name="복숭아">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="meal-time-section">
+                <div class="time-header">
+                    <span>🌙 저녁 급식</span>
+                </div>
+                <div class="menu-content">
+                    <div class="meal-header">
+                        <div class="meal-date">2025년 7월 3일 (목)</div>
+                    </div>
+                    <div class="menu-item" data-meal-time="dinner">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="구운주먹밥">구운주먹밥</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="dinner" data-menu-name="구운주먹밥">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="dinner">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="해물찌개">해물찌개</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="dinner" data-menu-name="해물찌개">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="dinner">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="돈파이">돈파이</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="dinner" data-menu-name="돈파이">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="dinner">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="쿨피스">쿨피스</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="dinner" data-menu-name="쿨피스">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                    <div class="menu-item" data-meal-time="dinner">
+                        <div class="menu-info">
+                            <div class="menu-name" data-menu-name="방울토마토">방울토마토</div>
+                        </div>
+                        <div class="star-rating" data-meal-time="dinner" data-menu-name="방울토마토">
+                            <span class="star" data-value="1">★</span>
+                            <span class="star" data-value="2">★</span>
+                            <span class="star" data-value="3">★</span>
+                            <span class="star" data-value="4">★</span>
+                            <span class="star" data-value="5">★</span>
+                            <span class="rating-value">0.0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="reservation" class="tab-content">
+            <div class="reservation-card">
+                <h3>내일 식사 제외 신청 마감</h3>
+                <div class="deadline-info">
+                    <p>내일 식사 제외 신청은 오늘 마감됩니다.</p>
+                    <ul>
+                        <li><strong>아침:</strong> <span id="deadline-breakfast">00:00</span></li>
+                        <li><strong>점심:</strong> <span id="deadline-lunch">00:00</span></li>
+                        <li><strong>저녁:</strong> <span id="deadline-dinner">00:00</span></li>
+                    </ul>
+                    <p>마감 시간 이후에는 신청하거나 수정할 수 없습니다.</p>
+                </div>
+                <button class="btn" id="reservation-button" onclick="openExclusionModal()">식사 제외 신청</button>
+            </div>
+
+            <div class="reservation-card" id="exclusion-summary-card">
+                <h3>내일 식사 제외 신청 내역</h3>
+                <div id="exclusion-summary-list">
+                    <!-- Exclusion summaries will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <div id="admin" class="tab-content">
+            <div class="admin-login-card" id="admin-login-panel">
+                <h3>관리자 로그인</h3>
+                <input type="password" id="admin-password" placeholder="비밀번호를 입력하세요">
+                <button class="btn" onclick="adminLogin()">로그인</button>
+            </div>
+
+            <div class="admin-dashboard-card" id="admin-dashboard-panel" style="display: none;">
+                <h3>관리자 대시보드</h3>
+
+                <div class="admin-section">
+                    <h4>식사 평가 요약</h4>
+                    <div id="admin-meal-ratings-summary">
+                        <!-- Meal ratings summary will be loaded here -->
+                    </div>
+                </div>
+
+                <div class="admin-section">
+                    <h4>식사 제외 신청 현황 (내일)</h4>
+                    <div id="admin-exclusion-list">
+                        <!-- Exclusion list will be loaded here -->
+                    </div>
+                </div>
+                <button class="btn btn-print" onclick="printAdminSummary()">요약 인쇄</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Exclusion Request Modal -->
+    <div id="exclusionModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="closeExclusionModal()">&times;</span>
+            <h3 id="modal-title">식사 제외 신청</h3>
+
+            <div id="exclusion-entries-container">
+                <!-- Exclusion entry forms will be added here -->
+            </div>
+
+            <button class="add-exclusion-entry-in-modal" onclick="addExclusionEntry()">+ 항목 추가</button>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeExclusionModal()">취소</button>
+                <button class="btn" onclick="saveExclusions()">저장</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Alert Modal -->
+    <div id="custom-alert-modal" class="modal">
+        <div class="modal-content" style="max-width: 300px; text-align: center;">
+            <h3 style="color: #4CAF50; margin-bottom: 15px;">알림</h3>
+            <p id="custom-alert-message"></p>
+            <button class="btn" onclick="document.getElementById('custom-alert-modal').style.display = 'none'" style="margin-top: 20px; width: 100px;">확인</button>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        // 전역 변수들 (Firebase 초기화 스크립트에서 window에 노출된 변수들을 사용)
+        let db;
+        let auth;
+        let getUserId; // 함수로 userId를 가져옴
+        let ratingsCollection;
+        let exclusionsCollection;
+
+        // --- 초기 로드 및 탭 전환 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // window에 노출된 Firebase 변수들을 가져와 사용
+            db = window.db;
+            auth = window.auth;
+            getUserId = window.getUserId;
+            ratingsCollection = window.ratingsCollection;
+            exclusionsCollection = window.exclusionsCollection;
+
+            // 탭 전환 기능
+            const navTabs = document.querySelectorAll('.nav-tab');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            window.showTab = function (tabId) {
+                navTabs.forEach(tab => tab.classList.remove('active'));
+                tabContents.forEach(content => content.classList.remove('active'));
+
+                document.querySelector(`.nav-tab[onclick="showTab('${tabId}')"]`).classList.add('active');
+                document.getElementById(tabId).classList.add('active');
+
+                // 관리자 탭으로 전환 시 대시보드 업데이트 시도
+                if (tabId === 'admin' && document.getElementById('admin-dashboard-panel').style.display === 'block') {
+                    updateAdminDashboard();
+                }
+            };
+
+            // 초기 로드 시 첫 번째 탭 활성화 (Firebase 초기화 스크립트에서 이미 호출됨)
+            // initStarRatings();
+            // updateReservationDeadlines();
+            // updateExclusionSummary();
+
+            // 30초마다 급식 상태 랜덤 업데이트 (데모용)
+            setInterval(() => {
+                const statusElements = document.querySelectorAll('.meal-status');
+                const statuses = ['status-available', 'status-low', 'status-soldout'];
+                const statusTexts = ['충분함', '부족함', '매진'];
+
+                statusElements.forEach(element => {
+                    const randomIndex = Math.floor(Math.random() * 3);
+                    element.className = `meal-status ${statuses[randomIndex]}`;
+                    element.textContent = statusTexts[randomIndex];
+                });
+            }, 30000);
+        });
+
+
+        // --- 커스텀 알림 모달 ---
+        function showCustomAlert(message) {
+            const alertModal = document.getElementById('custom-alert-modal');
+            const alertMessage = document.getElementById('custom-alert-message');
+            alertMessage.textContent = message;
+            alertModal.style.display = 'flex';
+        }
+
+
+        // --- 날짜 및 시간 관련 헬퍼 함수 ---
+        function getTomorrowDateString() {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            const year = tomorrow.getFullYear();
+            const month = (tomorrow.getMonth() + 1).toString().padStart(2, '0');
+            const day = tomorrow.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function getMealTypeName(mealType) {
+            switch (mealType) {
+                case 'breakfast':
+                    return '아침';
+                case 'lunch':
+                    return '점심';
+                case 'dinner':
+                    return '저녁';
+                default:
+                    return '';
+            }
+        }
+
+
+        // --- 식사 메뉴 탭 (평가 기능) ---
+
+        // 별점 시각적 업데이트 함수
+        function updateStarDisplay(stars, ratingValue) {
+            stars.forEach((star, index) => {
+                const starValue = index + 1;
+                if (ratingValue >= starValue) {
+                    star.classList.add('full');
+                    star.classList.remove('half');
+                } else if (ratingValue > index && ratingValue < starValue) {
+                    star.classList.add('half');
+                    star.classList.remove('full');
+                } else {
+                    star.classList.remove('full');
+                    star.classList.remove('half');
+                }
+            });
+        }
+
+        // 특정 메뉴 항목의 평균 평가를 Firestore에서 가져와 UI 업데이트
+        async function updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan) {
+            if (!ratingsCollection) {
+                console.warn("Firestore ratingsCollection not initialized yet.");
+                return;
+            }
+            try {
+                // 해당 메뉴 항목에 대한 모든 평가를 Firestore에서 쿼리
+                const q = window.query(ratingsCollection,
+                    window.where("mealTime", "==", mealTime),
+                    window.where("menuName", "==", menuName)
+                );
+
+                const querySnapshot = await window.getDocs(q);
+                let totalRating = 0;
+                let numberOfRatings = 0;
+                querySnapshot.forEach((doc) => {
+                    totalRating += doc.data().value;
+                    numberOfRatings++;
+                });
+
+                const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
+
+                updateStarDisplay(stars, average);
+                ratingValueSpan.textContent = average.toFixed(1);
+
+            } catch (e) {
+                console.error("Error updating menu item rating display:", e);
+            }
+        }
+
+        // 별점 클릭 이벤트 핸들러 (Firestore에 평가 저장)
+        async function handleStarClick(event) {
+            const userId = getUserId();
+            if (!userId || !ratingsCollection) {
+                showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            const star = event.target;
+            const ratingDiv = star.closest('.star-rating');
+            const mealTime = ratingDiv.dataset.mealTime;
+            const menuName = ratingDiv.dataset.menuName;
+
+            const rect = star.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const starWidth = rect.width;
+            // 반 별점 허용 (클릭 위치에 따라 0.5점 단위로)
+            const value = clickX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
+
+            // 사용자별, 메뉴별 고유한 문서 ID 생성
+            const ratingDocId = `${userId}_${mealTime}_${menuName}`;
+            const docRef = window.doc(ratingsCollection, ratingDocId);
+
+            try {
+                // setDoc을 사용하여 문서 생성 또는 업데이트
+                await window.setDoc(docRef, {
+                    userId: userId,
+                    mealTime: mealTime,
+                    menuName: menuName,
+                    value: value,
+                    timestamp: new Date()
+                });
+                console.log("Rating saved successfully!");
+                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
+            } catch (e) {
+                console.error("Error adding/updating rating: ", e);
+                showCustomAlert("평가 저장 중 오류가 발생했습니다.");
+            }
+        }
+
+        // 별점 초기화 및 이벤트 리스너 설정
+        function initStarRatings() {
+            const starRatings = document.querySelectorAll('.star-rating');
+            starRatings.forEach(ratingDiv => {
+                const mealTime = ratingDiv.dataset.mealTime;
+                const menuName = ratingDiv.dataset.menuName;
+                const stars = ratingDiv.querySelectorAll('.star');
+                const ratingValueSpan = ratingDiv.querySelector('.rating-value');
+
+                // 초기 로드 시 평가 표시
+                updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
+
+                // 별점 클릭 이벤트 리스너 추가
+                stars.forEach((star) => {
+                    star.removeEventListener('click', handleStarClick); // 중복 방지
+                    star.addEventListener('click', handleStarClick);
+                    star.removeEventListener('mouseenter', handleStarHover);
+                    star.addEventListener('mouseenter', handleStarHover);
+                });
+
+                // 마우스가 별점 영역을 벗어났을 때 원래 평가로 돌아가기
+                ratingDiv.removeEventListener('mouseleave', handleStarMouseLeave);
+                ratingDiv.addEventListener('mouseleave', handleStarMouseLeave);
+            });
+        }
+
+        // 별점 마우스 오버 시 시각적 효과
+        function handleStarHover(e) {
+            const star = e.target;
+            const ratingDiv = star.closest('.star-rating');
+            const stars = ratingDiv.querySelectorAll('.star');
+            const rect = star.getBoundingClientRect();
+            const hoverX = e.clientX - rect.left;
+            const starWidth = rect.width;
+            const hoverValue = hoverX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
+            updateStarDisplay(stars, hoverValue);
+        }
+
+        // 별점 마우스 리브 시 원래 평가로 복원
+        function handleStarMouseLeave(e) {
+            const ratingDiv = e.target;
+            const mealTime = ratingDiv.dataset.mealTime;
+            const menuName = ratingDiv.dataset.menuName;
+            const stars = ratingDiv.querySelectorAll('.star');
+            const ratingValueSpan = ratingDiv.querySelector('.rating-value');
+            updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
+        }
+
+
+        // --- 식사 예약 탭 (제외 신청 기능) ---
+
+        const mealDeadlines = {
+            breakfast: "00:00", // 자정
+            lunch: "09:00", // 오전 9시
+            dinner: "15:30" // 오후 3시 30분
+        };
+
+        function updateReservationDeadlines() {
+            const now = new Date();
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1); // 내일 날짜
+
+            document.getElementById('deadline-breakfast').textContent = mealDeadlines.breakfast;
+            document.getElementById('deadline-lunch').textContent = mealDeadlines.lunch;
+            document.getElementById('deadline-dinner').textContent = mealDeadlines.dinner;
+
+            const reservationButton = document.getElementById('reservation-button');
+            let isPastDeadline = false;
+
+            for (const mealType in mealDeadlines) {
+                const deadlineTime = mealDeadlines[mealType];
+                const [deadlineHour, deadlineMinute] = deadlineTime.split(':').map(Number);
+
+                const deadlineDate = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), deadlineHour, deadlineMinute, 0, 0);
+
+                if (now > deadlineDate) {
+                    isPastDeadline = true;
+                    break;
+                }
+            }
+
+            if (isPastDeadline) {
+                reservationButton.classList.add('disabled');
+                reservationButton.textContent = '식사 제외 신청 마감';
+            } else {
+                reservationButton.classList.remove('disabled');
+                reservationButton.textContent = '식사 제외 신청';
+            }
+        }
+
+        let currentModalMode = 'add'; // 'add' 또는 'edit'
+        let currentMealTypeBeingEdited = null; // 수정 중인 식사 유형
+
+        function openExclusionModal() {
+            const reservationButton = document.getElementById('reservation-button');
+            if (reservationButton.classList.contains('disabled')) {
+                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                return;
+            }
+
+            currentModalMode = 'add';
+            document.getElementById('modal-title').textContent = '식사 제외 신청';
+            const container = document.getElementById('exclusion-entries-container');
+            container.innerHTML = ''; // 기존 항목 초기화
+            addExclusionEntry(); // 기본 항목 하나 추가
+            document.getElementById('exclusionModal').style.display = 'flex';
+        }
+
+        async function openExclusionModalForEdit(mealTypeToEdit) {
+            const reservationButton = document.getElementById('reservation-button');
+            if (reservationButton.classList.contains('disabled')) {
+                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                return;
+            }
+
+            currentModalMode = 'edit';
+            currentMealTypeBeingEdited = mealTypeToEdit;
+            document.getElementById('modal-title').textContent = `${getMealTypeName(mealTypeToEdit)} 식사 제외 수정`;
+
+            const container = document.getElementById('exclusion-entries-container');
+            container.innerHTML = '';
+
+            const userId = getUserId();
+            if (!userId || !exclusionsCollection) {
+                showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
+                return;
+            }
+
+            const tomorrowDate = getTomorrowDateString();
+            try {
+                const q = window.query(exclusionsCollection,
+                    window.where("date", "==", tomorrowDate),
+                    window.where("userId", "==", userId),
+                    window.where("mealType", "==", mealTypeToEdit)
+                );
+                const querySnapshot = await window.getDocs(q);
+
+                if (!querySnapshot.empty) {
+                    querySnapshot.forEach(doc => {
+                        const data = doc.data();
+                        addExclusionEntry(data.mealType, data.reason, data.students);
+                    });
+                } else {
+                    addExclusionEntry(mealTypeToEdit); // 기존 신청이 없으면 빈 항목 추가
+                }
+            } catch (e) {
+                console.error("Error loading exclusions for edit:", e);
+                showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
+            }
+
+            document.getElementById('exclusionModal').style.display = 'flex';
+        }
+
+        function closeExclusionModal() {
+            document.getElementById('exclusionModal').style.display = 'none';
+        }
+
+        function addExclusionEntry(mealType = '', reason = '', students = []) {
+            const container = document.getElementById('exclusion-entries-container');
+            const entryCount = container.querySelectorAll('.exclusion-entry').length;
+            const newEntry = document.createElement('div');
+            newEntry.classList.add('exclusion-entry');
+            newEntry.innerHTML = `
+                <button type="button" class="remove-entry-btn" onclick="removeExclusionEntry(this)">&times;</button>
+                <div class="form-group">
+                    <label for="modal-meal-type-${entryCount}">식사 선택:</label>
+                    <select id="modal-meal-type-${entryCount}">
+                        <option value="">선택하세요</option>
+                        <option value="breakfast">아침</option>
+                        <option value="lunch">점심</option>
+                        <option value="dinner">저녁</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="modal-reason-${entryCount}">제외 이유:</label>
+                    <textarea id="modal-reason-${entryCount}" placeholder="예: 회식, 외출, 병원 방문 등"></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="modal-students-${entryCount}">제외 학생 (한 줄에 한 명씩):</label>
+                    <textarea id="modal-students-${entryCount}" placeholder="예:&#10;1206 김상윤&#10;1207 김시우"></textarea>
+                </div>
+            `;
+            container.appendChild(newEntry);
+
+            // 값 채우기 (수정 모드용)
+            if (mealType) {
+                newEntry.querySelector(`select`).value = mealType;
+            }
+            if (reason) {
+                newEntry.querySelector(`textarea[id^="modal-reason-"]`).value = reason;
+            }
+            if (students.length > 0) {
+                newEntry.querySelector(`textarea[id^="modal-students-"]`).value = students.join('\n');
+            }
+        }
+
+        function removeExclusionEntry(button) {
+            const entryElement = button.closest('.exclusion-entry');
+            entryElement.remove();
+        }
+
+        async function saveExclusions() {
+            const userId = getUserId();
+            if (!userId || !exclusionsCollection) {
+                showCustomAlert("데이터를 저장할 수 없습니다. 사용자 인증 상태를 확인하거나 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            const container = document.getElementById('exclusion-entries-container');
+            const entriesInModal = container.querySelectorAll('.exclusion-entry');
+            const newOrEditedExclusions = [];
+            let isValid = true;
+
+            entriesInModal.forEach(entryElement => {
+                const mealTypeSelect = entryElement.querySelector('select');
+                const mealType = mealTypeSelect.value;
+                const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
+                const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
+
+                const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
+
+                if (!mealType) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목의 식사를 선택해주세요.');
+                    return;
+                }
+                if (students.length === 0) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목에 학번 이름을 최소 한 명 이상 입력해주세요.');
+                    return;
+                }
+                if (!reason) {
+                    isValid = false;
+                    showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
+                    return;
+                }
+
+                newOrEditedExclusions.push({
+                    mealType: mealType,
+                    reason: reason,
+                    students: students
+                });
+            });
+
+            if (!isValid) {
+                return;
+            }
+
+            try {
+                const tomorrowDate = getTomorrowDateString();
+
+                // 현재 사용자의 내일 제외 신청을 모두 삭제
+                const existingExclusionsQuery = window.query(exclusionsCollection,
+                    window.where("date", "==", tomorrowDate),
+                    window.where("userId", "==", userId)
+                );
+                const existingExclusionsSnapshot = await window.getDocs(existingExclusionsQuery);
+                const deletePromises = [];
+                existingExclusionsSnapshot.forEach((doc) => {
+                    deletePromises.push(window.deleteDoc(doc.ref));
+                });
+                await Promise.all(deletePromises);
+
+                // 새로운 또는 수정된 제외 신청을 추가
+                const addPromises = [];
+                newOrEditedExclusions.forEach(exclusion => {
+                    addPromises.push(window.addDoc(exclusionsCollection, {
+                        userId: userId,
+                        mealType: exclusion.mealType,
+                        reason: exclusion.reason,
+                        students: exclusion.students,
+                        date: tomorrowDate,
+                        timestamp: new Date()
+                    }));
+                });
+                await Promise.all(addPromises);
+
+                closeExclusionModal();
+                showCustomAlert('식사 제외 신청이 저장되었습니다.');
+                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
+
+            } catch (e) {
+                console.error("Error saving exclusions: ", e);
+                showCustomAlert('식사 제외 신청 저장 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 식사 제외 신청 요약 업데이트
+        async function updateExclusionSummary() {
+            const summaryContainer = document.getElementById('exclusion-summary-list');
+            summaryContainer.innerHTML = '';
+
+            const userId = getUserId();
+            if (!userId || !exclusionsCollection) {
+                document.getElementById('exclusion-summary-card').style.display = 'none';
+                return;
+            }
+
+            const tomorrowDate = getTomorrowDateString();
+
+            try {
+                // 현재 사용자의 내일 제외 신청만 가져옴
+                const q = window.query(exclusionsCollection,
+                    window.where("date", "==", tomorrowDate),
+                    window.where("userId", "==", userId)
+                );
+
+                const querySnapshot = await window.getDocs(q);
+
+                const groupedExclusions = {
+                    'breakfast': [],
+                    'lunch': [],
+                    'dinner': []
+                };
+
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (groupedExclusions[data.mealType]) {
+                        groupedExclusions[data.mealType].push(data);
+                    }
+                });
+
+                const mealCategories = [{
+                    key: 'breakfast',
+                    label: '🌅 아침'
+                }, {
+                    key: 'lunch',
+                    label: '🍽️ 점심'
+                }, {
+                    key: 'dinner',
+                    label: '🌙 저녁'
+                }];
+
+                let hasAnyExclusion = false;
+                mealCategories.forEach(category => {
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.classList.add('exclusion-summary-category');
+
+                    const categoryHeader = document.createElement('h4');
+                    categoryHeader.textContent = category.label;
+
+                    const editButton = document.createElement('button');
+                    editButton.classList.add('edit-summary-btn');
+                    editButton.textContent = '수정하기';
+                    editButton.onclick = () => openExclusionModalForEdit(category.key);
+                    categoryHeader.appendChild(editButton);
+
+                    categoryDiv.appendChild(categoryHeader);
+
+                    const entriesForCategory = groupedExclusions[category.key];
+                    if (entriesForCategory.length > 0) {
+                        hasAnyExclusion = true;
+                        entriesForCategory.forEach(entry => {
+                            const summaryItem = document.createElement('div');
+                            summaryItem.classList.add('exclusion-summary-item');
+
+                            const studentNamesList = entry.students.map(s => `<li>${s}</li>`).join('');
+
+                            summaryItem.innerHTML = `
+                                <strong>제외 학생: (${entry.students.length}명)</strong>
+                                <ul>
+                                    ${studentNamesList}
+                                </ul>
+                                <p>이유: ${entry.reason}</p>
+                            `;
+                            categoryDiv.appendChild(summaryItem);
+                        });
+                    } else {
+                        const noEntryMessage = document.createElement('p');
+                        noEntryMessage.classList.add('no-exclusion-message');
+                        noEntryMessage.textContent = '신청 내역이 없습니다.';
+                        categoryDiv.appendChild(noEntryMessage);
+                    }
+                    summaryContainer.appendChild(categoryDiv);
+                });
+
+                document.getElementById('exclusion-summary-card').style.display = 'block'; // 신청 내역이 있든 없든 카드는 항상 표시
+
+            } catch (e) {
+                console.error("Error updating exclusion summary:", e);
+                document.getElementById('exclusion-summary-card').style.display = 'none'; // 오류 시 숨김
+            }
+        }
+
+
+        // --- 관리자 탭 ---
+
+        const ADMIN_PASSWORD = "admin"; // 실제 서비스에서는 더 안전한 방법 사용
+
+        function adminLogin() {
+            const passwordInput = document.getElementById('admin-password');
+            if (passwordInput.value === ADMIN_PASSWORD) {
+                document.getElementById('admin-login-panel').style.display = 'none';
+                document.getElementById('admin-dashboard-panel').style.display = 'block';
+                updateAdminDashboard(); // 로그인 성공 시 대시보드 업데이트
+            } else {
+                showCustomAlert('잘못된 비밀번호입니다.');
+                passwordInput.value = '';
+            }
+        }
+
+        async function updateAdminDashboard() {
+            if (!db || !ratingsCollection || !exclusionsCollection) {
+                console.warn("Firestore collections not initialized for admin dashboard.");
+                return;
+            }
+
+            const adminMealRatingsSummary = document.getElementById('admin-meal-ratings-summary');
+            adminMealRatingsSummary.innerHTML = '';
+
+            const mealTimes = [{
+                key: 'breakfast',
+                label: '🌅 아침'
+            }, {
+                key: 'lunch',
+                label: '🍽️ 점심'
+            }, {
+                key: 'dinner',
+                label: '🌙 저녁'
+            }];
+
+            // 식사 평가 요약 업데이트
+            for (const mealTimeData of mealTimes) {
+                const mealTimeDiv = document.createElement('div');
+                mealTimeDiv.classList.add('admin-section'); // admin-sub-section 대신 admin-section 사용
+                const mealTimeHeader = document.createElement('h4');
+                mealTimeHeader.textContent = mealTimeData.label;
+                mealTimeDiv.appendChild(mealTimeHeader);
+
+                const ul = document.createElement('ul');
+                let hasRatings = false;
+
+                // 하드코딩된 메뉴 목록 (실제 앱에서는 Firestore에서 메뉴 자체를 관리하는 것이 좋음)
+                const staticMenuItems = {
+                    breakfast: ["네코맘마덮밥", "비스킷", "삼치데리야끼구이", "시리얼&우유"],
+                    lunch: ["목살필라프", "차지키샐러드", "장각치킨구이", "복숭아"],
+                    dinner: ["구운주먹밥", "해물찌개", "돈파이", "쿨피스", "방울토마토"]
+                };
+
+                const menuItemsForTime = staticMenuItems[mealTimeData.key] || [];
+                if (menuItemsForTime.length === 0) {
+                    const p = document.createElement('p');
+                    p.textContent = '등록된 메뉴가 없습니다.';
+                    mealTimeDiv.appendChild(p);
+                    adminMealRatingsSummary.appendChild(mealTimeDiv);
+                    continue;
+                }
+
+                for (const menuName of menuItemsForTime) {
+                    try {
+                        // 모든 사용자의 해당 메뉴 평가를 쿼리
+                        const q = window.query(ratingsCollection,
+                            window.where("mealTime", "==", mealTimeData.key),
+                            window.where("menuName", "==", menuName)
+                        );
+                        const querySnapshot = await window.getDocs(q);
+
+                        let totalRating = 0;
+                        let numberOfRatings = 0;
+                        querySnapshot.forEach((doc) => {
+                            totalRating += doc.data().value;
+                            numberOfRatings++;
+                        });
+
+                        const average = numberOfRatings === 0 ? 0.0 : totalRating / numberOfRatings;
+
+                        const li = document.createElement('li');
+                        li.textContent = `${menuName}: 평균 ${average.toFixed(1)}점 (${numberOfRatings}명 평가)`;
+                        ul.appendChild(li);
+                        if (numberOfRatings > 0) hasRatings = true;
+                    } catch (e) {
+                        console.error(`Error fetching ratings for ${menuName}:`, e);
+                    }
+                }
+
+                if (!hasRatings) {
+                    const p = document.createElement('p');
+                    p.textContent = '아직 평가된 메뉴가 없습니다.';
+                    mealTimeDiv.appendChild(p);
+                } else {
+                    mealTimeDiv.appendChild(ul);
+                }
+                adminMealRatingsSummary.appendChild(mealTimeDiv);
+            }
+
+            // 식사 제외 신청 현황 (내일) 업데이트
+            const adminExclusionList = document.getElementById('admin-exclusion-list');
+            adminExclusionList.innerHTML = '';
+
+            const tomorrowDate = getTomorrowDateString();
+            try {
+                // 내일의 모든 제외 신청을 가져옴 (사용자 필터 없음)
+                const allExclusionsQuery = window.query(exclusionsCollection, window.where("date", "==", tomorrowDate));
+                const allExclusionsSnapshot = await window.getDocs(allExclusionsQuery);
+
+                const groupedExclusions = {
+                    'breakfast': [],
+                    'lunch': [],
+                    'dinner': []
+                };
+
+                allExclusionsSnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if (groupedExclusions[data.mealType]) {
+                        groupedExclusions[data.mealType].push(data);
+                    }
+                });
+
+                mealTimes.forEach(category => {
+                    const categoryDiv = document.createElement('div');
+                    categoryDiv.classList.add('admin-section');
+                    const categoryHeader = document.createElement('h4');
+                    categoryHeader.textContent = `${category.label} 제외 학생`;
+                    categoryDiv.appendChild(categoryHeader);
+
+                    const entriesForCategory = groupedExclusions[category.key];
+                    if (entriesForCategory.length > 0) {
+                        const ul = document.createElement('ul');
+                        entriesForCategory.forEach(entry => {
+                            entry.students.forEach(student => {
+                                const li = document.createElement('li');
+                                li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
+                                ul.appendChild(li);
+                            });
+                        });
+                        categoryDiv.appendChild(ul);
+                    } else {
+                        const noEntryMessage = document.createElement('p');
+                        noEntryMessage.textContent = '제외 신청 학생이 없습니다.';
+                        categoryDiv.appendChild(noEntryMessage);
+                    }
+                    adminExclusionList.appendChild(categoryDiv);
+                });
+            } catch (e) {
+                console.error("Error fetching admin exclusions:", e);
+                adminExclusionList.innerHTML = '<p>제외 신청 목록을 불러오는 데 실패했습니다.</p>';
+            }
+        }
+
+        function printAdminSummary() {
+            // 인쇄 기능 (브라우저 기본 인쇄 대화 상자 사용)
+            window.print();
+        }
+    </script>
+</body>
+
+</html>
