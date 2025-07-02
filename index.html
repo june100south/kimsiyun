@@ -11,7 +11,7 @@
         // Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -371,6 +371,33 @@
             updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
         }
 
+        // --- 내 평가 초기화 함수 ---
+        window.resetMyRating = async function(mealTime, menuName) {
+            if (!currentUserId || !ratingsCollection) {
+                showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                return;
+            }
+
+            const ratingDocId = `${currentUserId}_${mealTime}_${menuName}`;
+            const docRef = doc(ratingsCollection, ratingDocId);
+
+            try {
+                // 문서가 존재하는지 확인 후 삭제
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    await deleteDoc(docRef);
+                    showCustomAlert(`${getMealTypeName(mealTime)} - ${menuName}에 대한 내 평가가 초기화되었습니다.`);
+                    console.log(`User ${currentUserId}'s rating for ${mealTime} - ${menuName} reset.`);
+                } else {
+                    showCustomAlert('초기화할 평가 내역이 없습니다.');
+                    console.log(`No rating found for ${mealTime} - ${menuName} by user ${currentUserId}.`);
+                }
+            } catch (e) {
+                console.error("Error resetting rating: ", e);
+                showCustomAlert("평가 초기화 중 오류가 발생했습니다.");
+            }
+        };
+
 
         // --- 식사 예약 탭 (제외 신청 기능) ---
 
@@ -553,73 +580,47 @@
             const entriesInModal = container.querySelectorAll('.exclusion-entry');
             const tomorrowDate = getTomorrowDateString();
             let isValid = true;
-            const savePromises = [];
+            const upsertPromises = [];
+            const mealTypesInModal = new Set(); // 현재 모달 제출에 있는 식사 유형 추적
 
-            // Track meal types processed in this save operation to handle potential duplicates in modal
-            const processedMealTypes = new Set();
-
-            for (const entryElement of entriesInModal) {
+            // 1단계: 모달에서 데이터를 수집하고 Upsert를 준비합니다.
+            const modalDataByMealType = {};
+            entriesInModal.forEach(entryElement => {
                 const mealTypeSelect = entryElement.querySelector('select');
                 const mealType = mealTypeSelect.value;
                 const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
                 const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
-
                 const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
 
                 if (!mealType) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목의 식사를 선택해주세요.');
-                    break;
+                    return;
                 }
                 if (students.length === 0) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목에 학번 이름을 최소 한 명 이상 입력해주세요.');
-                    break;
+                    return;
                 }
                 if (!reason) {
                     isValid = false;
                     showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
-                    break;
+                    return;
                 }
 
-                // Prevent processing the same meal type multiple times from the modal if user added duplicates
-                if (processedMealTypes.has(mealType)) {
-                    console.warn(`[Modal Save] Skipping duplicate meal type '${mealType}' in modal.`);
-                    continue;
-                }
-                processedMealTypes.add(mealType);
-
-                // Check if an existing exclusion for this mealType and userId already exists for tomorrow
-                const existingQuery = query(exclusionsCollection,
-                    where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId),
-                    where("mealType", "==", mealType)
-                );
-                const existingSnapshot = await getDocs(existingQuery);
-
-                if (!existingSnapshot.empty) {
-                    // Update existing document
-                    existingSnapshot.forEach(docToUpdate => {
-                        console.log(`[Modal Save] Updating existing exclusion for ${mealType}:`, { reason, students });
-                        savePromises.push(updateDoc(docToUpdate.ref, {
-                            reason: reason,
-                            students: students,
-                            timestamp: new Date()
-                        }));
-                    });
+                // 동일한 식사 유형에 대한 여러 항목이 모달에 있는 경우, 통합합니다.
+                if (modalDataByMealType[mealType]) {
+                    // 학생 목록을 통합합니다 (중복 방지).
+                    modalDataByMealType[mealType].students = [...new Set([...modalDataByMealType[mealType].students, ...students])];
+                    // 이유를 통합합니다 (간단한 문자열 연결).
+                    if (reason && !modalDataByMealType[mealType].reason.includes(reason)) {
+                        modalDataByMealType[mealType].reason += `; ${reason}`;
+                    }
                 } else {
-                    // Add new document
-                    console.log(`[Modal Save] Adding new exclusion for ${mealType}:`, { reason, students });
-                    savePromises.push(addDoc(exclusionsCollection, {
-                        userId: currentUserId,
-                        mealType: mealType,
-                        reason: reason,
-                        students: students,
-                        date: tomorrowDate,
-                        timestamp: new Date()
-                    }));
+                    modalDataByMealType[mealType] = { mealType, reason, students };
                 }
-            }
+                mealTypesInModal.add(mealType); // 제출되는 고유 식사 유형을 추적합니다.
+            });
 
             if (!isValid) {
                 console.warn("[Modal] Save aborted: Form validation failed.");
@@ -627,8 +628,56 @@
             }
 
             try {
-                await Promise.all(savePromises);
-                console.log(`[Modal] Save operation completed for ${savePromises.length} entries.`);
+                // 2단계: 모달 콘텐츠를 기반으로 Upsert (업데이트 또는 추가) 항목을 수행합니다.
+                for (const mealType in modalDataByMealType) {
+                    const dataToSave = modalDataByMealType[mealType];
+                    const q = query(exclusionsCollection,
+                        where("date", "==", tomorrowDate),
+                        where("userId", "==", currentUserId),
+                        where("mealType", "==", mealType)
+                    );
+                    const existingSnapshot = await getDocs(q);
+
+                    if (!existingSnapshot.empty) {
+                        // 기존 문서를 업데이트합니다.
+                        existingSnapshot.forEach(docToUpdate => {
+                            console.log(`[Modal Save] Updating existing exclusion for ${mealType}:`, dataToSave);
+                            upsertPromises.push(updateDoc(docToUpdate.ref, {
+                                reason: dataToSave.reason,
+                                students: dataToSave.students,
+                                timestamp: new Date()
+                            }));
+                        });
+                    } else {
+                        // 새 문서를 추가합니다.
+                        console.log(`[Modal Save] Adding new exclusion for ${mealType}:`, dataToSave);
+                        upsertPromises.push(addDoc(exclusionsCollection, {
+                            userId: currentUserId,
+                            mealType: dataToSave.mealType,
+                            reason: dataToSave.reason,
+                            students: dataToSave.students,
+                            date: tomorrowDate,
+                            timestamp: new Date()
+                        }));
+                    }
+                }
+
+                // 3단계: 모달에 없는 기존 Firestore 문서를 삭제합니다.
+                const existingFirestoreExclusionsQuery = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId)
+                );
+                const existingFirestoreSnapshot = await getDocs(existingFirestoreExclusionsQuery);
+                const deletePromises = [];
+                existingFirestoreSnapshot.forEach(doc => {
+                    if (!mealTypesInModal.has(doc.data().mealType)) {
+                        console.log(`[Modal Save] Deleting old exclusion for ${doc.data().mealType} not present in modal.`);
+                        deletePromises.push(deleteDoc(doc.ref));
+                    }
+                });
+
+                await Promise.all([...upsertPromises, ...deletePromises]);
+                console.log(`[Modal] Save operation completed. Upserted ${upsertPromises.length}, deleted ${deletePromises.length} entries.`);
 
                 window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
@@ -1042,6 +1091,7 @@
             justify-content: space-between;
             padding: 12px 0;
             border-bottom: 1px solid #f0f0f0;
+            flex-wrap: wrap; /* Added for responsiveness */
         }
 
         .menu-item:last-child {
@@ -1050,6 +1100,9 @@
 
         .menu-info {
             flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
         }
 
         .menu-name {
@@ -1061,6 +1114,7 @@
             display: flex;
             gap: 2px;
             align-items: center;
+            margin-top: 5px; /* Added spacing */
         }
 
         .star {
@@ -1104,6 +1158,23 @@
             color: #666;
             min-width: 30px;
         }
+
+        .reset-rating-btn {
+            background: #f44336; /* Red color for delete */
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 10px; /* Smaller font for reset button */
+            margin-top: 5px;
+            transition: background 0.3s;
+        }
+
+        .reset-rating-btn:hover {
+            background: #da190b;
+        }
+
 
         .notification {
             background: #fff3cd;
@@ -1560,6 +1631,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="네코맘마덮밥">네코맘마덮밥</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '네코맘마덮밥')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1573,6 +1645,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="비스킷">비스킷</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '비스킷')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1586,6 +1659,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="삼치데리야끼구이">삼치데리야끼구이</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '삼치데리야끼구이')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1599,6 +1673,7 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="시리얼&우유">시리얼&우유</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('breakfast', '시리얼&우유')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1623,6 +1698,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="목살필라프">목살필라프</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '목살필라프')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1636,6 +1712,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="차지키샐러드">차지키샐러드</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '차지키샐러드')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1649,6 +1726,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="장각치킨구이">장각치킨구이</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '장각치킨구이')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1662,6 +1740,7 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="복숭아">복숭아</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('lunch', '복숭아')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1686,6 +1765,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="구운주먹밥">구운주먹밥</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '구운주먹밥')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1699,6 +1779,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="해물찌개">해물찌개</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '해물찌개')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1712,6 +1793,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="돈파이">돈파이</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '돈파이')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1725,6 +1807,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="쿨피스">쿨피스</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '쿨피스')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1738,6 +1821,7 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="방울토마토">방울토마토</div>
+                            <button class="reset-rating-btn" onclick="window.resetMyRating('dinner', '방울토마토')">내 평가 초기화</button>
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
