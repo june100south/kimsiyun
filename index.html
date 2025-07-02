@@ -50,11 +50,11 @@
                     }
                     console.log("Firebase initialized and user authenticated:", currentUserId);
 
-                    // 사용자 ID를 UI에 표시
-                    const userIdDisplay = document.getElementById('user-id-display');
-                    if (userIdDisplay) {
-                        userIdDisplay.textContent = `사용자 ID: ${currentUserId}`;
-                    }
+                    // 사용자 ID를 UI에 표시하는 코드 제거됨 (익명 사용이므로 UI에 표시하지 않음)
+                    // const userIdDisplay = document.getElementById('user-id-display');
+                    // if (userIdDisplay) {
+                    //     userIdDisplay.textContent = `사용자 ID: ${currentUserId}`;
+                    // }
 
                     // 컬렉션 참조 설정 (public/data 경로 사용)
                     ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
@@ -844,7 +844,7 @@
             opacity: 0.9;
         }
 
-        .user-id-display {
+        .user-id-display { /* 이 클래스는 이제 사용되지 않지만, CSS에서 삭제하지 않았습니다. */
             font-size: 0.7em;
             margin-top: 10px;
             opacity: 0.8;
@@ -1444,7 +1444,7 @@
         <div class="header">
             <h1>🍽️ 급식 매니저</h1>
             <p>스마트한 급식 시스템으로 더 나은 식사를</p>
-            <div id="user-id-display" class="user-id-display">사용자 ID: 로딩 중...</div>
+            <!-- 사용자 ID 표시 div 제거됨 -->
         </div>
 
         <div class="nav-tabs">
