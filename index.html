@@ -86,10 +86,17 @@
                         console.log("Ratings data changed via onSnapshot. Updating UI...");
                         document.querySelectorAll('.menu-item').forEach(item => {
                             const mealTime = item.dataset.mealTime;
-                            const menuName = item.querySelector('.menu-name').dataset.menuName; // menu-name은 menu-item의 자식
-                            const starsDiv = item.querySelector('.star-rating');
-                            const ratingValueSpan = starsDiv.querySelector('.rating-value');
-                            updateMenuItemRatingDisplay(mealTime, menuName, starsDiv.querySelectorAll('.star'), ratingValueSpan);
+                            // menu-name은 menu-item의 자식 요소이므로, item에서 직접 쿼리
+                            const menuNameElement = item.querySelector('.menu-name');
+                            const menuName = menuNameElement ? menuNameElement.dataset.menuName : null;
+
+                            if (menuName) { // menuName이 유효한 경우에만 업데이트
+                                const starsDiv = item.querySelector('.star-rating');
+                                const ratingValueSpan = starsDiv.querySelector('.rating-value');
+                                updateMenuItemRatingDisplay(mealTime, menuName, starsDiv.querySelectorAll('.star'), ratingValueSpan);
+                            } else {
+                                console.warn("Menu name element not found for item:", item);
+                            }
                         });
                         if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
                             updateAdminDashboard(); // 관리자 대시보드 업데이트
@@ -179,13 +186,14 @@
 
         // --- 탭 전환 기능 (전역 함수로 노출) ---
         window.showTab = function (tabId) {
+            console.log(`Switching to tab: ${tabId}`);
             const navTabs = document.querySelectorAll('.nav-tab');
             const tabContents = document.querySelectorAll('.tab-content');
 
             navTabs.forEach(tab => tab.classList.remove('active'));
             tabContents.forEach(content => content.classList.remove('active'));
 
-            document.querySelector(`.nav-tab[onclick="showTab('${tabId}')"]`).classList.add('active');
+            document.querySelector(`.nav-tab[onclick="window.showTab('${tabId}')"]`).classList.add('active');
             document.getElementById(tabId).classList.add('active');
 
             // 관리자 탭으로 전환 시 대시보드 업데이트 시도
@@ -254,12 +262,13 @@
             const star = event.target;
             const ratingDiv = star.closest('.star-rating');
             const mealTime = ratingDiv.dataset.mealTime;
-            // .menu-name 요소를 찾아서 data-menu-name을 가져옴 (star-rating의 부모인 menu-item 내부에 있음)
+            // .menu-item에서 .menu-name을 찾고 data-menu-name을 가져옴
             const menuItem = ratingDiv.closest('.menu-item');
-            const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+            const menuNameElement = menuItem ? menuItem.querySelector('.menu-name') : null;
+            const menuName = menuNameElement ? menuNameElement.dataset.menuName : null;
 
             if (!menuName) {
-                console.error("Menu name not found for rating.");
+                console.error("Menu name not found for rating. RatingDiv:", ratingDiv);
                 showCustomAlert("메뉴 정보를 찾을 수 없습니다. 다시 시도해주세요.");
                 return;
             }
@@ -292,9 +301,10 @@
             const starRatings = document.querySelectorAll('.star-rating');
             starRatings.forEach(ratingDiv => {
                 const mealTime = ratingDiv.dataset.mealTime;
-                // .menu-name 요소를 찾아서 data-menu-name을 가져옴
+                // .menu-item에서 .menu-name을 찾고 data-menu-name을 가져옴
                 const menuItem = ratingDiv.closest('.menu-item');
-                const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+                const menuNameElement = menuItem ? menuItem.querySelector('.menu-name') : null;
+                const menuName = menuNameElement ? menuNameElement.dataset.menuName : null;
 
                 if (!menuName) {
                     console.error("initStarRatings: Menu name not found for star-rating div:", ratingDiv);
@@ -334,9 +344,10 @@
         function handleStarMouseLeave(e) {
             const ratingDiv = e.target;
             const mealTime = ratingDiv.dataset.mealTime;
-            // .menu-name 요소를 찾아서 data-menu-name을 가져옴
+            // .menu-item에서 .menu-name을 찾고 data-menu-name을 가져옴
             const menuItem = ratingDiv.closest('.menu-item');
-            const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+            const menuNameElement = menuItem ? menuItem.querySelector('.menu-name') : null;
+            const menuName = menuNameElement ? menuNameElement.dataset.menuName : null;
 
             if (!menuName) {
                 console.error("handleStarMouseLeave: Menu name not found for star-rating div:", ratingDiv);
@@ -375,10 +386,10 @@
 
                 const deadlineDate = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), deadlineHour, deadlineMinute, 0, 0);
 
-                console.log(`Deadline check for ${mealType}: Now: ${now.toLocaleString()}, Deadline: ${deadlineDate.toLocaleString()}`);
+                console.log(`[Deadline Check] Meal: ${mealType}, Current Time: ${now.toLocaleString()}, Deadline: ${deadlineDate.toLocaleString()}`);
                 if (now > deadlineDate) {
                     isPastDeadline = true;
-                    console.log(`${mealType} deadline passed.`);
+                    console.log(`[Deadline Check] ${mealType} deadline passed.`);
                     break;
                 }
             }
@@ -386,11 +397,11 @@
             if (isPastDeadline) {
                 reservationButton.classList.add('disabled');
                 reservationButton.textContent = '식사 제외 신청 마감';
-                console.log("Reservation button disabled due to past deadline.");
+                console.log("[Reservation Button] Disabled due to past deadline.");
             } else {
                 reservationButton.classList.remove('disabled');
                 reservationButton.textContent = '식사 제외 신청';
-                console.log("Reservation button enabled.");
+                console.log("[Reservation Button] Enabled.");
             }
         }
 
@@ -398,9 +409,11 @@
         let currentMealTypeBeingEdited = null;
 
         window.openExclusionModal = function() { // 전역 함수로 노출
+            console.log("[Modal] Attempting to open exclusion modal.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                console.log("[Modal] Cannot open: Reservation button is disabled.");
                 return;
             }
 
@@ -408,14 +421,17 @@
             document.getElementById('modal-title').textContent = '식사 제외 신청';
             const container = document.getElementById('exclusion-entries-container');
             container.innerHTML = '';
-            addExclusionEntry();
+            window.addExclusionEntry(); // window.addExclusionEntry로 변경
             document.getElementById('exclusionModal').style.display = 'flex';
+            console.log("[Modal] Exclusion modal opened in ADD mode.");
         }
 
         window.openExclusionModalForEdit = async function(mealTypeToEdit) { // 전역 함수로 노출
+            console.log(`[Modal] Attempting to open exclusion modal for EDIT: ${mealTypeToEdit}`);
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
+                console.log("[Modal] Cannot open for edit: Reservation button is disabled.");
                 return;
             }
 
@@ -428,6 +444,7 @@
 
             if (!currentUserId || !exclusionsCollection) {
                 showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
+                console.error("[Modal] Data not ready for edit: currentUserId or exclusionsCollection missing.");
                 return;
             }
 
@@ -443,10 +460,12 @@
                 if (!querySnapshot.empty) {
                     querySnapshot.forEach(doc => {
                         const data = doc.data();
-                        addExclusionEntry(data.mealType, data.reason, data.students);
+                        window.addExclusionEntry(data.mealType, data.reason, data.students); // window.addExclusionEntry로 변경
                     });
+                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions for edit.`);
                 } else {
-                    addExclusionEntry(mealTypeToEdit);
+                    window.addExclusionEntry(mealTypeToEdit); // window.addExclusionEntry로 변경
+                    console.log(`[Modal] No existing exclusions for ${mealTypeToEdit}, adding empty entry.`);
                 }
             } catch (e) {
                 console.error("Error loading exclusions for edit:", e);
@@ -454,19 +473,22 @@
             }
 
             document.getElementById('exclusionModal').style.display = 'flex';
+            console.log("[Modal] Exclusion modal opened in EDIT mode.");
         }
 
         window.closeExclusionModal = function() { // 전역 함수로 노출
+            console.log("[Modal] Closing exclusion modal.");
             document.getElementById('exclusionModal').style.display = 'none';
         }
 
         window.addExclusionEntry = function(mealType = '', reason = '', students = []) { // 전역 함수로 노출
+            console.log("[Modal] Adding new exclusion entry form.");
             const container = document.getElementById('exclusion-entries-container');
             const entryCount = container.querySelectorAll('.exclusion-entry').length;
             const newEntry = document.createElement('div');
             newEntry.classList.add('exclusion-entry');
             newEntry.innerHTML = `
-                <button type="button" class="remove-entry-btn" onclick="removeExclusionEntry(this)">&times;</button>
+                <button type="button" class="remove-entry-btn" onclick="window.removeExclusionEntry(this)">&times;</button>
                 <div class="form-group">
                     <label for="modal-meal-type-${entryCount}">식사 선택:</label>
                     <select id="modal-meal-type-${entryCount}">
@@ -499,13 +521,16 @@
         }
 
         window.removeExclusionEntry = function(button) { // 전역 함수로 노출
+            console.log("[Modal] Removing exclusion entry form.");
             const entryElement = button.closest('.exclusion-entry');
             entryElement.remove();
         }
 
         window.saveExclusions = async function() { // 전역 함수로 노출
+            console.log("[Modal] Attempting to save exclusions.");
             if (!currentUserId || !exclusionsCollection) {
                 showCustomAlert("데이터를 저장할 수 없습니다. 사용자 인증 상태를 확인하거나 잠시 후 다시 시도해주세요.");
+                console.error("[Modal] Cannot save: currentUserId or exclusionsCollection missing.");
                 return;
             }
 
@@ -546,6 +571,7 @@
             });
 
             if (!isValid) {
+                console.warn("[Modal] Save aborted: Form validation failed.");
                 return;
             }
 
@@ -563,6 +589,7 @@
                     deletePromises.push(deleteDoc(doc.ref));
                 });
                 await Promise.all(deletePromises);
+                console.log(`[Modal] Deleted ${deletePromises.length} existing exclusions.`);
 
                 // 새로운 또는 수정된 제외 신청을 추가
                 const addPromises = [];
@@ -577,8 +604,9 @@
                     }));
                 });
                 await Promise.all(addPromises);
+                console.log(`[Modal] Added ${addPromises.length} new/edited exclusions.`);
 
-                closeExclusionModal();
+                window.closeExclusionModal(); // window.closeExclusionModal로 변경
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
             } catch (e) {
                 console.error("Error saving exclusions: ", e);
@@ -692,14 +720,16 @@
 
         window.adminLogin = function() { // 전역 함수로 노출
             const passwordInput = document.getElementById('admin-password');
-            console.log(`Admin Login Attempt: Entered Password: "${passwordInput.value}", Expected: "${ADMIN_PASSWORD}"`);
+            console.log(`[Admin Login] Attempt: Entered Password: "${passwordInput.value}", Expected: "${ADMIN_PASSWORD}"`);
             if (passwordInput.value === ADMIN_PASSWORD) {
                 document.getElementById('admin-login-panel').style.display = 'none';
                 document.getElementById('admin-dashboard-panel').style.display = 'block';
                 updateAdminDashboard(); // 로그인 성공 시 대시보드 업데이트
+                console.log("[Admin Login] Success.");
             } else {
                 showCustomAlert('잘못된 비밀번호입니다.');
                 passwordInput.value = '';
+                console.warn("[Admin Login] Failed: Incorrect password.");
             }
         }
 
@@ -757,7 +787,7 @@
                             where("menuName", "==", menuName)
                         );
                         const querySnapshot = await getDocs(q);
-                        console.log(`Admin dashboard: Ratings query for ${mealTimeData.key}, ${menuName} snapshot size:`, querySnapshot.size);
+                        console.log(`[Admin Dashboard] Ratings query for ${mealTimeData.key}, ${menuName} snapshot size:`, querySnapshot.size);
 
                         let totalRating = 0;
                         let numberOfRatings = 0;
@@ -795,7 +825,7 @@
             try {
                 const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
                 const allExclusionsSnapshot = await getDocs(allExclusionsQuery);
-                console.log("Admin dashboard: All exclusions snapshot size:", allExclusionsSnapshot.size);
+                console.log("[Admin Dashboard] All exclusions snapshot size:", allExclusionsSnapshot.size);
 
                 const groupedExclusions = {
                     'breakfast': [],
@@ -842,6 +872,7 @@
         }
 
         window.printAdminSummary = function() { // 전역 함수로 노출
+            console.log("[Admin] Printing summary.");
             window.print();
         }
     </script>
@@ -1488,9 +1519,9 @@
         </div>
 
         <div class="nav-tabs">
-            <button class="nav-tab active" onclick="showTab('meals')">급식 메뉴</button>
-            <button class="nav-tab" onclick="showTab('reservation')">식사 제외 신청</button>
-            <button class="nav-tab" onclick="showTab('admin')">관리자</button>
+            <button class="nav-tab active" onclick="window.showTab('meals')">급식 메뉴</button>
+            <button class="nav-tab" onclick="window.showTab('reservation')">식사 제외 신청</button>
+            <button class="nav-tab" onclick="window.showTab('admin')">관리자</button>
         </div>
 
         <div id="meals" class="tab-content active">
