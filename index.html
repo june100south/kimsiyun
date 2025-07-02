@@ -15,9 +15,18 @@
 
         // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        // Firebase 설정은 Canvas 환경에서 제공되는 __firebase_config 변수를 사용합니다.
-        // 만약 __firebase_config가 정의되지 않았다면 빈 객체를 기본값으로 사용합니다.
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        // 사용자님이 제공해주신 Firebase 설정 정보
+        const firebaseConfig = {
+            apiKey: "AIzaSyDHsuHUmGXe-qLSzVBR6Npy8SmMQ8bJB0o",
+            authDomain: "swai2-e63e9.firebaseapp.com",
+            projectId: "swai2-e63e9",
+            storageBucket: "swai2-e63e9.firebasestorage.app",
+            messagingSenderId: "137618516147",
+            appId: "1:137618516147:web:bff3d64b0a63052c3da8c6",
+            measurementId: "G-SJ263PTXNZ"
+        };
+        
         // 'initialAuthToken'이 선언되기 전에 자신을 참조하는 문제를 해결하기 위해
         // '__initial_auth_token' 원본 변수를 사용하도록 수정했습니다.
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -37,11 +46,20 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 사용자 인증: initialAuthToken이 있으면 커스텀 토큰으로 로그인, 아니면 익명으로 로그인 시도
+                // 커스텀 토큰으로 로그인 시도, 실패 시 익명 로그인으로 폴백
                 if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
+                    try {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } catch (tokenError) {
+                        console.warn("Custom token sign-in failed, falling back to anonymous sign-in:", tokenError);
+                        await signInAnonymously(auth);
+                        console.log("Fell back to anonymous sign-in.");
+                    }
                 } else {
+                    // 커스텀 토큰이 없으면 익명 로그인
                     await signInAnonymously(auth);
+                    console.log("Signed in anonymously (no custom token provided).");
                 }
 
                 // 인증 상태 변화 감지 및 모든 앱 로직 시작
@@ -133,7 +151,8 @@
                 });
 
             } catch (error) {
-                console.error("Error initializing Firebase or Firestore:", error);
+                // 이 catch 블록은 initializeApp, getAuth, getFirestore와 같은 초기화 자체의 심각한 오류를 처리합니다.
+                console.error("Error initializing Firebase or Firestore (critical):", error);
                 const appContainer = document.querySelector('.app-container');
                 const errorDiv = document.createElement('div');
                 errorDiv.style.padding = '20px';
@@ -1075,6 +1094,29 @@
 
         .tab-content.active {
             display: block;
+        }
+
+        /* 스크롤바 전체 */
+        ::-webkit-scrollbar {
+            width: 8px; /* 스크롤바의 너비 */
+            height: 8px; /* 가로 스크롤바의 높이 */
+        }
+
+        /* 스크롤바 트랙 (스크롤바가 이동하는 레일) */
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; /* 밝은 회색 배경 */
+            border-radius: 10px;
+        }
+
+        /* 스크롤바 썸 (움직이는 부분) */
+        ::-webkit-scrollbar-thumb {
+            background: #888; /* 어두운 회색 썸 */
+            border-radius: 10px;
+        }
+
+        /* 스크롤바 썸 호버 시 */
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555; /* 호버 시 더 어둡게 */
         }
 
         .meal-card {
