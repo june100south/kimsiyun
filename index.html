@@ -191,6 +191,35 @@
             alertModal.style.display = 'flex';
         }
 
+        // --- 커스텀 확인 모달 (새로 추가) ---
+        function showCustomConfirm(message, onConfirm) {
+            const existingConfirm = document.getElementById('custom-confirm-modal');
+            if (existingConfirm) {
+                existingConfirm.remove();
+            }
+
+            const confirmModal = document.createElement('div');
+            confirmModal.id = 'custom-confirm-modal';
+            confirmModal.classList.add('modal');
+            confirmModal.innerHTML = `
+                <div class="modal-content" style="max-width: 350px; text-align: center;">
+                    <h3 style="color: #dc3545; margin-bottom: 15px;">경고</h3>
+                    <p>${message}</p>
+                    <div class="modal-actions" style="justify-content: center; margin-top: 25px;">
+                        <button class="btn btn-secondary" onclick="document.getElementById('custom-confirm-modal').remove()">취소</button>
+                        <button class="btn btn-danger" id="confirm-action-btn">확인</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(confirmModal);
+            confirmModal.style.display = 'flex';
+
+            document.getElementById('confirm-action-btn').onclick = () => {
+                document.getElementById('custom-confirm-modal').remove();
+                onConfirm();
+            };
+        }
+
 
         // --- 날짜 및 시간 관련 헬퍼 함수 ---
         function getTomorrowDateString() {
@@ -1003,6 +1032,38 @@
             console.log("[Admin] Printing summary.");
             window.print();
         }
+
+        // --- 평점 전체 초기화 기능 (새로 추가) ---
+        window.resetAllRatings = function() {
+            showCustomConfirm("정말로 모든 식사 평점을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.", async () => {
+                if (!db || !ratingsCollection) {
+                    showCustomAlert("데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
+                    console.error("Firestore ratingsCollection not initialized for reset.");
+                    return;
+                }
+
+                try {
+                    const querySnapshot = await getDocs(ratingsCollection);
+                    if (querySnapshot.empty) {
+                        showCustomAlert("초기화할 평점이 없습니다.");
+                        console.log("No ratings to reset.");
+                        return;
+                    }
+
+                    const batch = writeBatch(db);
+                    querySnapshot.forEach((doc) => {
+                        batch.delete(doc.ref);
+                    });
+                    await batch.commit();
+
+                    showCustomAlert("모든 평점이 성공적으로 초기화되었습니다.");
+                    console.log("All ratings successfully reset.");
+                } catch (e) {
+                    console.error("Error resetting all ratings:", e);
+                    showCustomAlert("평점 초기화 중 오류가 발생했습니다.");
+                }
+            });
+        };
     </script>
 
     <style>
@@ -1337,6 +1398,14 @@
             background: #5a6268;
         }
 
+        .btn-danger { /* 새로 추가: 위험 작업 버튼 스타일 */
+            background: #dc3545;
+        }
+        .btn-danger:hover {
+            background: #c82333;
+        }
+
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -1651,7 +1720,8 @@
             margin-bottom: 0;
         }
 
-        .admin-section .btn-print {
+        .admin-section .btn-print,
+        .admin-section .btn-reset-ratings { /* 버튼 스타일 통합 */
             background: #007bff;
             color: white;
             padding: 8px 15px;
@@ -1662,11 +1732,20 @@
             display: block;
             margin-left: auto;
             margin-right: auto;
+            text-align: center; /* 텍스트 중앙 정렬 */
         }
 
         .admin-section .btn-print:hover {
             background: #0056b3;
         }
+        .admin-section .btn-reset-ratings {
+            background: #dc3545; /* 빨간색으로 위험 작업 강조 */
+            margin-top: 15px; /* 다른 버튼과 간격 */
+        }
+        .admin-section .btn-reset-ratings:hover {
+            background: #c82333;
+        }
+
 
         /* Student Input Specific Styles */
         .student-inputs-container {
@@ -1986,6 +2065,7 @@
                     </div>
                 </div>
                 <button class="btn btn-print" onclick="window.printAdminSummary()">요약 인쇄</button>
+                <button class="btn btn-reset-ratings" onclick="window.resetAllRatings()">평점 전체 초기화</button> <!-- 새로 추가된 버튼 -->
             </div>
         </div>
     </div>
@@ -2015,6 +2095,18 @@
             <h3 style="color: #4CAF50; margin-bottom: 15px;">알림</h3>
             <p id="custom-alert-message"></p>
             <button class="btn" onclick="document.getElementById('custom-alert-modal').remove()" style="margin-top: 20px; width: 100px;">확인</button>
+        </div>
+    </div>
+
+    <!-- Custom Confirm Modal (새로 추가) -->
+    <div id="custom-confirm-modal" class="modal">
+        <div class="modal-content" style="max-width: 350px; text-align: center;">
+            <h3 style="color: #dc3545; margin-bottom: 15px;">경고</h3>
+            <p id="custom-confirm-message"></p>
+            <div class="modal-actions" style="justify-content: center; margin-top: 25px;">
+                <button class="btn btn-secondary" onclick="document.getElementById('custom-confirm-modal').remove()">취소</button>
+                <button class="btn btn-danger" id="confirm-action-btn">확인</button>
+            </div>
         </div>
     </div>
 </body>
