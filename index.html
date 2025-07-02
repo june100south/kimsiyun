@@ -10,7 +10,7 @@
     <script type="module">
         // Firebase 앱 및 Firestore 관련 모듈 가져오기
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"; // signInWithCustomToken 제거
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Canvas 환경에서 제공되는 전역 변수들 (initialAuthToken은 더 이상 사용하지 않음)
@@ -54,7 +54,7 @@
                         // 이 부분은 signInAnonymously가 실패할 경우를 대비하지만, 위에서 이미 시도했으므로 거의 발생하지 않음
                         currentUserId = crypto.randomUUID();
                     }
-                    console.log("Firebase initialized and user authenticated:", currentUserId);
+                    console.log("Firebase initialized and user authenticated. Current User ID:", currentUserId);
 
                     // 컬렉션 참조 설정 (public/data 경로 사용)
                     ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
@@ -72,8 +72,9 @@
                     onSnapshot(allExclusionsQuery, (snapshot) => {
                         console.log("Exclusions data changed, updating UI...");
                         updateExclusionSummary(); // 현재 사용자의 요약 업데이트
+                        // 관리자 대시보드가 활성화된 경우에만 업데이트
                         if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
-                            updateAdminDashboard(); // 관리자 대시보드 업데이트
+                            updateAdminDashboard();
                         }
                     }, (error) => {
                         console.error("Error listening to exclusions:", error);
@@ -90,8 +91,9 @@
                             const ratingValueSpan = starsDiv.querySelector('.rating-value');
                             updateMenuItemRatingDisplay(mealTime, menuName, starsDiv.querySelectorAll('.star'), ratingValueSpan);
                         });
+                        // 관리자 대시보드가 활성화된 경우에만 업데이트
                         if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
-                            updateAdminDashboard(); // 관리자 대시보드 업데이트
+                            updateAdminDashboard();
                         }
                     }, (error) => {
                         console.error("Error listening to ratings:", error);
@@ -228,8 +230,8 @@
             const star = event.target;
             const ratingDiv = star.closest('.star-rating');
             const mealTime = ratingDiv.dataset.mealTime;
-            const menuName = ratingDiv.dataset.menuName;
-
+            const menuName = ratingDiv.dataset.menuName; // star-rating div에 직접 data-menu-name이 있으므로 수정
+            
             const rect = star.getBoundingClientRect();
             const clickX = event.clientX - rect.left;
             const starWidth = rect.width;
@@ -262,7 +264,8 @@
             const starRatings = document.querySelectorAll('.star-rating');
             starRatings.forEach(ratingDiv => {
                 const mealTime = ratingDiv.dataset.mealTime;
-                const menuName = ratingDiv.dataset.menuName;
+                // .menu-name 요소를 찾지 않고 star-rating div의 dataset에서 직접 menuName을 가져옴
+                const menuName = ratingDiv.dataset.menuName; 
                 const stars = ratingDiv.querySelectorAll('.star');
                 const ratingValueSpan = ratingDiv.querySelector('.rating-value');
 
@@ -299,7 +302,8 @@
         function handleStarMouseLeave(e) {
             const ratingDiv = e.target;
             const mealTime = ratingDiv.dataset.mealTime;
-            const menuName = ratingDiv.dataset.menuName;
+            // .menu-name 요소를 찾지 않고 star-rating div의 dataset에서 직접 menuName을 가져옴
+            const menuName = ratingDiv.dataset.menuName; 
             const stars = ratingDiv.querySelectorAll('.star');
             const ratingValueSpan = ratingDiv.querySelector('.rating-value');
             updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
@@ -544,11 +548,13 @@
 
         // 식사 제외 신청 요약 업데이트
         async function updateExclusionSummary() {
+            console.log("updateExclusionSummary called. currentUserId:", currentUserId);
             const summaryContainer = document.getElementById('exclusion-summary-list');
             summaryContainer.innerHTML = '';
 
             if (!currentUserId || !exclusionsCollection) {
                 document.getElementById('exclusion-summary-card').style.display = 'none';
+                console.log("updateExclusionSummary: currentUserId or exclusionsCollection not ready.");
                 return;
             }
 
@@ -562,6 +568,11 @@
                 );
 
                 const querySnapshot = await getDocs(q);
+                console.log("updateExclusionSummary: Exclusion query snapshot size:", querySnapshot.size);
+                querySnapshot.forEach((doc) => {
+                    console.log("updateExclusionSummary: Fetched exclusion doc:", doc.id, doc.data());
+                });
+
 
                 const groupedExclusions = {
                     'breakfast': [],
@@ -584,7 +595,7 @@
                     label: '🍽️ 점심'
                 }, {
                     key: 'dinner',
-                    label: '🌙 저녁'
+                    label: '� 저녁'
                 }];
 
                 let hasAnyExclusion = false;
@@ -631,6 +642,7 @@
                 });
 
                 document.getElementById('exclusion-summary-card').style.display = 'block'; // 신청 내역이 있든 없든 카드는 항상 표시
+                console.log("updateExclusionSummary: Exclusion summary updated. Has any exclusion:", hasAnyExclusion);
 
             } catch (e) {
                 console.error("Error updating exclusion summary:", e);
@@ -656,6 +668,7 @@
         }
 
         async function updateAdminDashboard() {
+            console.log("updateAdminDashboard called.");
             if (!db || !ratingsCollection || !exclusionsCollection) {
                 console.warn("Firestore collections not initialized for admin dashboard.");
                 return;
@@ -710,6 +723,8 @@
                             where("menuName", "==", menuName)
                         );
                         const querySnapshot = await getDocs(q);
+                        console.log(`Admin dashboard: Ratings query for ${mealTimeData.key}, ${menuName} snapshot size:`, querySnapshot.size);
+
 
                         let totalRating = 0;
                         let numberOfRatings = 0;
@@ -748,6 +763,11 @@
                 // 내일의 모든 제외 신청을 가져옴 (사용자 필터 없음)
                 const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
                 const allExclusionsSnapshot = await getDocs(allExclusionsQuery);
+                console.log("Admin dashboard: All exclusions snapshot size:", allExclusionsSnapshot.size);
+                allExclusionsSnapshot.forEach((doc) => {
+                    console.log("Admin dashboard: Fetched all exclusion doc:", doc.id, doc.data());
+                });
+
 
                 const groupedExclusions = {
                     'breakfast': [],
