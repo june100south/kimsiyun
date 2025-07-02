@@ -6,28 +6,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>급식 매니저 - 스마트 급식 시스템</title>
 
-    <!-- Firebase SDKs 및 모든 JavaScript 로직을 하나의 모듈 스크립트에 통합 -->
+    <!-- 모든 JavaScript 로직을 하나의 모듈 스크립트에 통합 -->
     <script type="module">
-        // Firebase 앱 및 Firestore 관련 모듈 가져오기
+        // Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Canvas 환경에서 제공되는 전역 변수들 (initialAuthToken은 더 이상 사용하지 않음)
+        // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const firebaseConfig = {
-            // 사용자님이 제공해주신 API 키로 설정
             apiKey: "AIzaSyDHsuHUmGXe-qLSzVBR6Npy8SmMQ8bJB0o",
             authDomain: "swai2-e63e9.firebaseapp.com",
             projectId: "swai2-e63e9",
             storageBucket: "swai2-e63e9.firebasestorage.app",
             messagingSenderId: "137618516147",
             appId: "1:137618516147:web:bff3d64b0a63052c3da8c6",
-            measurementId: "G-SJ263PTXNZ" // 애널리틱스 사용 안하면 이 줄도 삭제 가능
+            measurementId: "G-SJ263PTXNZ"
         };
-        // const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // 더 이상 사용하지 않음
 
-        // Firebase 및 Firestore 인스턴스 변수 (모듈 스코프 최상단에 선언)
+        // Firebase 및 Firestore 인스턴스 변수
         let app;
         let db;
         let auth;
@@ -42,7 +40,7 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 사용자 인증: 익명으로만 로그인 시도 (custom-token-mismatch 오류 방지)
+                // 사용자 인증: 익명으로 로그인 시도
                 await signInAnonymously(auth);
 
                 // 인증 상태 변화 감지 및 모든 앱 로직 시작
@@ -50,11 +48,15 @@
                     if (user) {
                         currentUserId = user.uid;
                     } else {
-                        // 사용자가 없을 경우 익명 ID 생성 (다중 사용자 앱이므로 고유 ID 필요)
-                        // 이 부분은 signInAnonymously가 실패할 경우를 대비하지만, 위에서 이미 시도했으므로 거의 발생하지 않음
-                        currentUserId = crypto.randomUUID();
+                        currentUserId = crypto.randomUUID(); // 익명 사용자를 위한 고유 ID 생성
                     }
                     console.log("Firebase initialized and user authenticated. Current User ID:", currentUserId);
+
+                    // UI에 사용자 ID 표시 (선택 사항, 디버깅용)
+                    const userIdDisplay = document.getElementById('user-id-display');
+                    if (userIdDisplay) {
+                        userIdDisplay.textContent = `사용자 ID: ${currentUserId.substring(0, 8)}...`;
+                    }
 
                     // 컬렉션 참조 설정 (public/data 경로 사용)
                     ratingsCollection = collection(db, `artifacts/${appId}/public/data/ratings`);
@@ -63,18 +65,17 @@
                     // --- 초기 데이터 로드 및 실시간 리스너 설정 ---
                     initStarRatings(); // 별점 초기화 및 실시간 리스너 설정
                     updateReservationDeadlines(); // 예약 마감 시간 업데이트
-                    updateExclusionSummary(); // 제외 신청 요약 업데이트
+                    updateExclusionSummary(); // 제외 신청 요약 업데이트 (현재 사용자)
 
                     // 모든 제외 신청에 대한 실시간 리스너 (관리자 대시보드 및 요약 업데이트용)
                     const tomorrowDate = getTomorrowDateString();
                     const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
 
                     onSnapshot(allExclusionsQuery, (snapshot) => {
-                        console.log("Exclusions data changed, updating UI...");
+                        console.log("Exclusions data changed via onSnapshot. Updating UI...");
                         updateExclusionSummary(); // 현재 사용자의 요약 업데이트
-                        // 관리자 대시보드가 활성화된 경우에만 업데이트
                         if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
-                            updateAdminDashboard();
+                            updateAdminDashboard(); // 관리자 대시보드 업데이트
                         }
                     }, (error) => {
                         console.error("Error listening to exclusions:", error);
@@ -82,22 +83,33 @@
 
                     // 모든 평가에 대한 실시간 리스너 (관리자 대시보드 및 메뉴 평가 업데이트용)
                     onSnapshot(ratingsCollection, (snapshot) => {
-                        console.log("Ratings data changed, updating UI...");
-                        // 모든 메뉴 항목의 평가를 다시 계산하고 표시
+                        console.log("Ratings data changed via onSnapshot. Updating UI...");
                         document.querySelectorAll('.menu-item').forEach(item => {
                             const mealTime = item.dataset.mealTime;
-                            const menuName = item.querySelector('.menu-name').dataset.menuName;
+                            const menuName = item.querySelector('.menu-name').dataset.menuName; // menu-name은 menu-item의 자식
                             const starsDiv = item.querySelector('.star-rating');
                             const ratingValueSpan = starsDiv.querySelector('.rating-value');
                             updateMenuItemRatingDisplay(mealTime, menuName, starsDiv.querySelectorAll('.star'), ratingValueSpan);
                         });
-                        // 관리자 대시보드가 활성화된 경우에만 업데이트
                         if (document.getElementById('admin-dashboard-panel').classList.contains('active')) {
-                            updateAdminDashboard();
+                            updateAdminDashboard(); // 관리자 대시보드 업데이트
                         }
                     }, (error) => {
                         console.error("Error listening to ratings:", error);
                     });
+
+                    // 30초마다 급식 상태 랜덤 업데이트 (데모용)
+                    setInterval(() => {
+                        const statusElements = document.querySelectorAll('.meal-status');
+                        const statuses = ['status-available', 'status-low', 'status-soldout'];
+                        const statusTexts = ['충분함', '부족함', '매진'];
+
+                        statusElements.forEach(element => {
+                            const randomIndex = Math.floor(Math.random() * 3);
+                            element.className = `meal-status ${statuses[randomIndex]}`;
+                            element.textContent = statusTexts[randomIndex];
+                        });
+                    }, 30000);
                 });
 
             } catch (error) {
@@ -121,9 +133,22 @@
 
         // --- 커스텀 알림 모달 ---
         function showCustomAlert(message) {
-            const alertModal = document.getElementById('custom-alert-modal');
-            const alertMessage = document.getElementById('custom-alert-message');
-            alertMessage.textContent = message;
+            const existingAlert = document.getElementById('custom-alert-modal');
+            if (existingAlert) {
+                existingAlert.remove(); // 기존 알림이 있으면 제거
+            }
+
+            const alertModal = document.createElement('div');
+            alertModal.id = 'custom-alert-modal';
+            alertModal.classList.add('modal');
+            alertModal.innerHTML = `
+                <div class="modal-content" style="max-width: 300px; text-align: center;">
+                    <h3 style="color: #4CAF50; margin-bottom: 15px;">알림</h3>
+                    <p id="custom-alert-message">${message}</p>
+                    <button class="btn" onclick="document.getElementById('custom-alert-modal').remove()" style="margin-top: 20px; width: 100px;">확인</button>
+                </div>
+            `;
+            document.body.appendChild(alertModal);
             alertModal.style.display = 'flex';
         }
 
@@ -153,7 +178,7 @@
 
 
         // --- 탭 전환 기능 (전역 함수로 노출) ---
-        window.showTab = function (tabId) { // window.showTab으로 변경
+        window.showTab = function (tabId) {
             const navTabs = document.querySelectorAll('.nav-tab');
             const tabContents = document.querySelectorAll('.tab-content');
 
@@ -196,7 +221,6 @@
                 return;
             }
             try {
-                // 해당 메뉴 항목에 대한 모든 평가를 Firestore에서 쿼리
                 const q = query(ratingsCollection,
                     where("mealTime", "==", mealTime),
                     where("menuName", "==", menuName)
@@ -230,20 +254,25 @@
             const star = event.target;
             const ratingDiv = star.closest('.star-rating');
             const mealTime = ratingDiv.dataset.mealTime;
-            const menuName = ratingDiv.dataset.menuName; // star-rating div에 직접 data-menu-name이 있으므로 수정
-            
+            // .menu-name 요소를 찾아서 data-menu-name을 가져옴 (star-rating의 부모인 menu-item 내부에 있음)
+            const menuItem = ratingDiv.closest('.menu-item');
+            const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+
+            if (!menuName) {
+                console.error("Menu name not found for rating.");
+                showCustomAlert("메뉴 정보를 찾을 수 없습니다. 다시 시도해주세요.");
+                return;
+            }
+
             const rect = star.getBoundingClientRect();
             const clickX = event.clientX - rect.left;
             const starWidth = rect.width;
-            // 반 별점 허용 (클릭 위치에 따라 0.5점 단위로)
             const value = clickX < starWidth / 2 ? parseInt(star.dataset.value) - 0.5 : parseInt(star.dataset.value);
 
-            // 사용자별, 메뉴별 고유한 문서 ID 생성
             const ratingDocId = `${currentUserId}_${mealTime}_${menuName}`;
             const docRef = doc(ratingsCollection, ratingDocId);
 
             try {
-                // setDoc을 사용하여 문서 생성 또는 업데이트
                 await setDoc(docRef, {
                     userId: currentUserId,
                     mealTime: mealTime,
@@ -252,7 +281,6 @@
                     timestamp: new Date()
                 });
                 console.log("Rating saved successfully!");
-                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
             } catch (e) {
                 console.error("Error adding/updating rating: ", e);
                 showCustomAlert("평가 저장 중 오류가 발생했습니다.");
@@ -264,23 +292,27 @@
             const starRatings = document.querySelectorAll('.star-rating');
             starRatings.forEach(ratingDiv => {
                 const mealTime = ratingDiv.dataset.mealTime;
-                // .menu-name 요소를 찾지 않고 star-rating div의 dataset에서 직접 menuName을 가져옴
-                const menuName = ratingDiv.dataset.menuName; 
+                // .menu-name 요소를 찾아서 data-menu-name을 가져옴
+                const menuItem = ratingDiv.closest('.menu-item');
+                const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+
+                if (!menuName) {
+                    console.error("initStarRatings: Menu name not found for star-rating div:", ratingDiv);
+                    return; // 메뉴 이름을 찾지 못하면 건너뛰기
+                }
+
                 const stars = ratingDiv.querySelectorAll('.star');
                 const ratingValueSpan = ratingDiv.querySelector('.rating-value');
 
-                // 초기 로드 시 평가 표시
                 updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
 
-                // 별점 클릭 이벤트 리스너 추가
                 stars.forEach((star) => {
-                    star.removeEventListener('click', handleStarClick); // 중복 방지
+                    star.removeEventListener('click', handleStarClick);
                     star.addEventListener('click', handleStarClick);
                     star.removeEventListener('mouseenter', handleStarHover);
                     star.addEventListener('mouseenter', handleStarHover);
                 });
 
-                // 마우스가 별점 영역을 벗어났을 때 원래 평가로 돌아가기
                 ratingDiv.removeEventListener('mouseleave', handleStarMouseLeave);
                 ratingDiv.addEventListener('mouseleave', handleStarMouseLeave);
             });
@@ -302,8 +334,15 @@
         function handleStarMouseLeave(e) {
             const ratingDiv = e.target;
             const mealTime = ratingDiv.dataset.mealTime;
-            // .menu-name 요소를 찾지 않고 star-rating div의 dataset에서 직접 menuName을 가져옴
-            const menuName = ratingDiv.dataset.menuName; 
+            // .menu-name 요소를 찾아서 data-menu-name을 가져옴
+            const menuItem = ratingDiv.closest('.menu-item');
+            const menuName = menuItem ? menuItem.querySelector('.menu-name').dataset.menuName : null;
+
+            if (!menuName) {
+                console.error("handleStarMouseLeave: Menu name not found for star-rating div:", ratingDiv);
+                return;
+            }
+
             const stars = ratingDiv.querySelectorAll('.star');
             const ratingValueSpan = ratingDiv.querySelector('.rating-value');
             updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
@@ -313,15 +352,15 @@
         // --- 식사 예약 탭 (제외 신청 기능) ---
 
         const mealDeadlines = {
-            breakfast: "00:00", // 자정
-            lunch: "09:00", // 오전 9시
-            dinner: "15:30" // 오후 3시 30분
+            breakfast: "00:00",
+            lunch: "09:00",
+            dinner: "15:30"
         };
 
         function updateReservationDeadlines() {
             const now = new Date();
             const tomorrow = new Date();
-            tomorrow.setDate(tomorrow.getDate() + 1); // 내일 날짜
+            tomorrow.setDate(tomorrow.getDate() + 1);
 
             document.getElementById('deadline-breakfast').textContent = mealDeadlines.breakfast;
             document.getElementById('deadline-lunch').textContent = mealDeadlines.lunch;
@@ -351,8 +390,8 @@
             }
         }
 
-        let currentModalMode = 'add'; // 'add' 또는 'edit'
-        let currentMealTypeBeingEdited = null; // 수정 중인 식사 유형
+        let currentModalMode = 'add';
+        let currentMealTypeBeingEdited = null;
 
         function openExclusionModal() {
             const reservationButton = document.getElementById('reservation-button');
@@ -364,8 +403,8 @@
             currentModalMode = 'add';
             document.getElementById('modal-title').textContent = '식사 제외 신청';
             const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = ''; // 기존 항목 초기화
-            addExclusionEntry(); // 기본 항목 하나 추가
+            container.innerHTML = '';
+            addExclusionEntry();
             document.getElementById('exclusionModal').style.display = 'flex';
         }
 
@@ -403,7 +442,7 @@
                         addExclusionEntry(data.mealType, data.reason, data.students);
                     });
                 } else {
-                    addExclusionEntry(mealTypeToEdit); // 기존 신청이 없으면 빈 항목 추가
+                    addExclusionEntry(mealTypeToEdit);
                 }
             } catch (e) {
                 console.error("Error loading exclusions for edit:", e);
@@ -444,7 +483,6 @@
             `;
             container.appendChild(newEntry);
 
-            // 값 채우기 (수정 모드용)
             if (mealType) {
                 newEntry.querySelector(`select`).value = mealType;
             }
@@ -538,8 +576,6 @@
 
                 closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
-                // onSnapshot 리스너가 자동으로 UI를 업데이트할 것입니다.
-
             } catch (e) {
                 console.error("Error saving exclusions: ", e);
                 showCustomAlert('식사 제외 신청 저장 중 오류가 발생했습니다.');
@@ -561,7 +597,6 @@
             const tomorrowDate = getTomorrowDateString();
 
             try {
-                // 현재 사용자의 내일 제외 신청만 가져옴
                 const q = query(exclusionsCollection,
                     where("date", "==", tomorrowDate),
                     where("userId", "==", currentUserId)
@@ -569,10 +604,6 @@
 
                 const querySnapshot = await getDocs(q);
                 console.log("updateExclusionSummary: Exclusion query snapshot size:", querySnapshot.size);
-                querySnapshot.forEach((doc) => {
-                    console.log("updateExclusionSummary: Fetched exclusion doc:", doc.id, doc.data());
-                });
-
 
                 const groupedExclusions = {
                     'breakfast': [],
@@ -595,7 +626,7 @@
                     label: '🍽️ 점심'
                 }, {
                     key: 'dinner',
-                    label: '� 저녁'
+                    label: '🌙 저녁'
                 }];
 
                 let hasAnyExclusion = false;
@@ -641,12 +672,12 @@
                     summaryContainer.appendChild(categoryDiv);
                 });
 
-                document.getElementById('exclusion-summary-card').style.display = 'block'; // 신청 내역이 있든 없든 카드는 항상 표시
+                document.getElementById('exclusion-summary-card').style.display = 'block';
                 console.log("updateExclusionSummary: Exclusion summary updated. Has any exclusion:", hasAnyExclusion);
 
             } catch (e) {
                 console.error("Error updating exclusion summary:", e);
-                document.getElementById('exclusion-summary-card').style.display = 'none'; // 오류 시 숨김
+                document.getElementById('exclusion-summary-card').style.display = 'none';
             }
         }
 
@@ -691,7 +722,7 @@
             // 식사 평가 요약 업데이트
             for (const mealTimeData of mealTimes) {
                 const mealTimeDiv = document.createElement('div');
-                mealTimeDiv.classList.add('admin-section'); // admin-sub-section 대신 admin-section 사용
+                mealTimeDiv.classList.add('admin-section');
                 const mealTimeHeader = document.createElement('h4');
                 mealTimeHeader.textContent = mealTimeData.label;
                 mealTimeDiv.appendChild(mealTimeHeader);
@@ -699,7 +730,6 @@
                 const ul = document.createElement('ul');
                 let hasRatings = false;
 
-                // 하드코딩된 메뉴 목록 (실제 앱에서는 Firestore에서 메뉴 자체를 관리하는 것이 좋음)
                 const staticMenuItems = {
                     breakfast: ["네코맘마덮밥", "비스킷", "삼치데리야끼구이", "시리얼&우유"],
                     lunch: ["목살필라프", "차지키샐러드", "장각치킨구이", "복숭아"],
@@ -717,14 +747,12 @@
 
                 for (const menuName of menuItemsForTime) {
                     try {
-                        // 모든 사용자의 해당 메뉴 평가를 쿼리
                         const q = query(ratingsCollection,
                             where("mealTime", "==", mealTimeData.key),
                             where("menuName", "==", menuName)
                         );
                         const querySnapshot = await getDocs(q);
                         console.log(`Admin dashboard: Ratings query for ${mealTimeData.key}, ${menuName} snapshot size:`, querySnapshot.size);
-
 
                         let totalRating = 0;
                         let numberOfRatings = 0;
@@ -760,14 +788,9 @@
 
             const tomorrowDate = getTomorrowDateString();
             try {
-                // 내일의 모든 제외 신청을 가져옴 (사용자 필터 없음)
                 const allExclusionsQuery = query(exclusionsCollection, where("date", "==", tomorrowDate));
                 const allExclusionsSnapshot = await getDocs(allExclusionsQuery);
                 console.log("Admin dashboard: All exclusions snapshot size:", allExclusionsSnapshot.size);
-                allExclusionsSnapshot.forEach((doc) => {
-                    console.log("Admin dashboard: Fetched all exclusion doc:", doc.id, doc.data());
-                });
-
 
                 const groupedExclusions = {
                     'breakfast': [],
@@ -795,7 +818,7 @@
                         entriesForCategory.forEach(entry => {
                             entry.students.forEach(student => {
                                 const li = document.createElement('li');
-                                li.textContent = `${student} (이유: ${entry.reason}, 신청자: ${entry.userId.substring(0, 8)}...)`; // userId 일부 표시
+                                li.textContent = `${student} (이유: ${entry.reason})`;
                                 ul.appendChild(li);
                             });
                         });
@@ -814,22 +837,8 @@
         }
 
         function printAdminSummary() {
-            // 인쇄 기능 (브라우저 기본 인쇄 대화 상자 사용)
             window.print();
         }
-
-        // 30초마다 급식 상태 랜덤 업데이트 (데모용)
-        setInterval(() => {
-            const statusElements = document.querySelectorAll('.meal-status');
-            const statuses = ['status-available', 'status-low', 'status-soldout'];
-            const statusTexts = ['충분함', '부족함', '매진'];
-
-            statusElements.forEach(element => {
-                const randomIndex = Math.floor(Math.random() * 3);
-                element.className = `meal-status ${statuses[randomIndex]}`;
-                element.textContent = statusTexts[randomIndex];
-            });
-        }, 30000);
     </script>
 
     <style>
@@ -882,7 +891,7 @@
             opacity: 0.9;
         }
 
-        .user-id-display { /* 이 클래스는 이제 사용되지 않지만, CSS에서 삭제하지 않았습니다. */
+        .user-id-display {
             font-size: 0.7em;
             margin-top: 10px;
             opacity: 0.8;
@@ -1088,9 +1097,7 @@
         /* Adjusted font for the main header in reservation tab */
         #reservation .reservation-card h3 {
             font-size: 20px;
-            /* Adjusted size */
             font-weight: 700;
-            /* Adjusted weight */
             margin-bottom: 20px;
             color: #333;
             text-align: center;
@@ -1099,11 +1106,8 @@
         /* Adjusted font for the summary card header */
         #exclusion-summary-card h3 {
             font-size: 20px;
-            /* Adjusted size */
             font-weight: 700;
-            /* Adjusted weight */
             margin-bottom: 15px;
-            /* Slightly less margin than modal header */
             color: #333;
             text-align: center;
         }
@@ -1153,8 +1157,8 @@
             overflow: auto;
             background-color: rgba(0, 0, 0, 0.6);
             padding-top: 60px;
-            justify-content: center; /* 추가: 모달 중앙 정렬 */
-            align-items: center; /* 추가: 모달 중앙 정렬 */
+            justify-content: center;
+            align-items: center;
         }
 
         .modal-content {
@@ -1244,7 +1248,6 @@
 
         .add-exclusion-entry-in-modal {
             background: #17a2b8;
-            /* Info blue */
             color: white;
             border: none;
             padding: 8px 15px;
@@ -1253,7 +1256,6 @@
             font-size: 13px;
             margin-top: 10px;
             display: block;
-            /* Make it a block element to take full width or easily center */
             width: fit-content;
             margin-left: auto;
             margin-right: auto;
@@ -1299,7 +1301,6 @@
             margin-bottom: 5px;
             display: flex;
             flex-direction: column;
-            /* Stack content vertically */
         }
 
         .exclusion-summary-item:last-child {
@@ -1338,7 +1339,6 @@
 
         .edit-summary-btn {
             background: #f0f0f0;
-            /* Light grey */
             color: #555;
             border: 1px solid #ccc;
             padding: 5px 10px;
@@ -1346,9 +1346,7 @@
             cursor: pointer;
             font-size: 12px;
             margin-left: 10px;
-            /* Space from text */
             flex-shrink: 0;
-            /* Don't shrink the button */
         }
 
         .edit-summary-btn:hover {
@@ -1459,7 +1457,6 @@
 
         .admin-section .btn-print {
             background: #007bff;
-            /* Blue */
             color: white;
             padding: 8px 15px;
             border-radius: 5px;
@@ -1482,7 +1479,7 @@
         <div class="header">
             <h1>🍽️ 급식 매니저</h1>
             <p>스마트한 급식 시스템으로 더 나은 식사를</p>
-            <!-- 사용자 ID 표시 div 제거됨 -->
+            <div id="user-id-display" class="user-id-display">사용자 ID: 로딩 중...</div>
         </div>
 
         <div class="nav-tabs">
@@ -1770,7 +1767,7 @@
         <div class="modal-content" style="max-width: 300px; text-align: center;">
             <h3 style="color: #4CAF50; margin-bottom: 15px;">알림</h3>
             <p id="custom-alert-message"></p>
-            <button class="btn" onclick="document.getElementById('custom-alert-modal').style.display = 'none'" style="margin-top: 20px; width: 100px;">확인</button>
+            <button class="btn" onclick="document.getElementById('custom-alert-modal').remove()" style="margin-top: 20px; width: 100px;">확인</button>
         </div>
     </div>
 </body>
