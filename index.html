@@ -10,20 +10,15 @@
     <script type="module">
         // Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = {
-            apiKey: "AIzaSyDHsuHUmGXe-qLSzVBR6Npy8SmMQ8bJB0o",
-            authDomain: "swai2-e63e9.firebaseapp.com",
-            projectId: "swai2-e63e9",
-            storageBucket: "swai2-e63e9.firebasestorage.app",
-            messagingSenderId: "137618516147",
-            appId: "1:137618516147:web:bff3d64b0a63052c3da8c6",
-            measurementId: "G-SJ263PTXNZ"
-        };
+        // Firebase 설정은 Canvas 환경에서 제공되는 __firebase_config 변수를 사용합니다.
+        // 만약 __firebase_config가 정의되지 않았다면 빈 객체를 기본값으로 사용합니다.
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         // Firebase 및 Firestore 인스턴스 변수
         let app;
@@ -40,8 +35,12 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
 
-                // 사용자 인증: 익명으로 로그인 시도
-                await signInAnonymously(auth);
+                // 사용자 인증: initialAuthToken이 있으면 커스텀 토큰으로 로그인, 아니면 익명으로 로그인 시도
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
 
                 // 인증 상태 변화 감지 및 모든 앱 로직 시작
                 onAuthStateChanged(auth, (user) => {
@@ -421,8 +420,9 @@
             }
         }
 
-        window.openExclusionModal = async function() { // 전역 함수로 노출
-            console.log("[Modal] Attempting to open exclusion modal for NEW/EDIT entry.");
+        // "새로운 식사 제외 신청" 버튼 클릭 시 호출되는 함수 (항상 빈 양식으로 시작)
+        window.openExclusionModalForNew = function() {
+            console.log("[Modal] Attempting to open exclusion modal for NEW entry.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -430,54 +430,20 @@
                 return;
             }
 
-            document.getElementById('modal-title').textContent = '식사 제외 신청'; // 통합된 모달 제목
+            document.getElementById('modal-title').textContent = '새로운 식사 제외 신청';
             const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = ''; // 항상 기존 항목 모두 비우기
-
-            if (!currentUserId || !exclusionsCollection) {
-                showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
-                console.error("[Modal] Data not ready: currentUserId or exclusionsCollection missing.");
-                return;
-            }
-
-            const tomorrowDate = getTomorrowDateString();
-            try {
-                // 현재 사용자의 내일 제외 신청 내역 모두 불러오기
-                const q = query(exclusionsCollection,
-                    where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId)
-                );
-                console.log(`[Modal Load] Querying for all exclusions. Date: ${tomorrowDate}, UserID: ${currentUserId}`);
-                const querySnapshot = await getDocs(q);
-                console.log(`[Modal Load] Query snapshot empty: ${querySnapshot.empty}, Size: ${querySnapshot.size}`);
-
-
-                if (!querySnapshot.empty) {
-                    querySnapshot.forEach(doc => {
-                        const data = doc.data();
-                        console.log("[Modal Load] Found existing exclusion:", data);
-                        // doc.id를 addExclusionEntry 함수에 전달하여 기존 문서임을 표시
-                        window.addExclusionEntry(data.mealType, data.reason, data.students, doc.id);
-                    });
-                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions.`);
-                } else {
-                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가
-                    console.log("[Modal] No existing exclusions, adding empty entry.");
-                }
-            } catch (e) {
-                console.error("Error loading exclusions for modal:", e);
-                showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
-            }
+            container.innerHTML = ''; // Always clear existing items
+            console.log("[Modal] Cleared existing entries in modal container."); // Added log for debugging
+            window.addExclusionEntry(); // Add one new, blank entry
+            console.log("[Modal] Added one new blank entry for new request."); // Added log for debugging
 
             document.getElementById('exclusionModal').style.display = 'flex';
-            console.log("[Modal] Exclusion modal opened.");
+            console.log("[Modal] Exclusion modal opened for new entry.");
         }
 
-        // "수정하기" 버튼은 이제 단순히 `openExclusionModal`을 호출합니다.
-        // 이 함수는 더 이상 필요 없으므로 제거합니다.
-        /*
-        window.openExclusionModalForEdit = async function(mealTypeToEdit) {
-            console.log(`[Modal] Edit button clicked for ${mealTypeToEdit}. Opening unified exclusion modal for EDIT.`);
+        // "수정하기" 버튼 클릭 시 호출되는 함수 (기존 신청 내역 불러오기)
+        window.openExclusionModalForEdit = async function() {
+            console.log("[Modal] Attempting to open exclusion modal for EDIT entry.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -527,7 +493,6 @@
             document.getElementById('exclusionModal').style.display = 'flex';
             console.log("[Modal] Exclusion modal opened for edit.");
         };
-        */
 
 
         window.closeExclusionModal = function() { // 전역 함수로 노출
@@ -546,37 +511,71 @@
                 newEntry.dataset.docId = docId;
             }
             newEntry.innerHTML = `
-                <button type="button" class="remove-entry-btn" onclick="window.removeExclusionEntry(this)">&times;</button>
                 <div class="form-group">
-                    <label for="modal-meal-type-${entryCount}">식사 선택:</label>
+                    <label for="modal-meal-type-${entryCount}">제외 식사:</label>
                     <select id="modal-meal-type-${entryCount}">
-                        <option value="">선택하세요</option>
+                        <option value="">식사 선택</option>
                         <option value="breakfast">아침</option>
                         <option value="lunch">점심</option>
                         <option value="dinner">저녁</option>
                     </select>
+                    <button type="button" class="remove-entry-btn" onclick="window.removeExclusionEntry(this)">이 항목 삭제</button>
                 </div>
                 <div class="form-group">
-                    <label for="modal-reason-${entryCount}">제외 이유:</label>
-                    <textarea id="modal-reason-${entryCount}" placeholder="예: 회식, 외출, 병원 방문 등"></textarea>
+                    <label>제외 학생:</label>
+                    <div class="student-inputs-container" id="student-inputs-container-${entryCount}">
+                        <!-- 개별 학생 입력 필드가 여기에 추가됩니다 -->
+                    </div>
+                    <button type="button" class="add-student-btn" onclick="window.addStudentInput(this)">+ 학생 추가</button>
                 </div>
                 <div class="form-group">
-                    <label for="modal-students-${entryCount}">제외 학생 (한 줄에 한 명씩):</label>
-                    <textarea id="modal-students-${entryCount}" placeholder="예:&#10;1206 김상윤&#10;1207 김시우"></textarea>
+                    <label for="modal-reason-${entryCount}">이유:</label>
+                    <select id="modal-reason-${entryCount}">
+                        <option value="">이유 선택</option>
+                        <option value="외출">외출</option>
+                        <option value="회식">회식</option>
+                        <option value="심자연">심자연</option>
+                        <option value="건강(잠, 속이 안 좋음 등)">건강(잠, 속이 안 좋음 등)</option>
+                        <option value="기타">기타</option>
+                    </select>
                 </div>
             `;
             container.appendChild(newEntry);
 
             if (mealType) {
-                newEntry.querySelector(`select`).value = mealType;
+                newEntry.querySelector(`select[id^="modal-meal-type-"]`).value = mealType;
             }
             if (reason) {
-                newEntry.querySelector(`textarea[id^="modal-reason-"]`).value = reason;
+                newEntry.querySelector(`select[id^="modal-reason-"]`).value = reason;
             }
+            // 학생 데이터가 있으면 각 학생별로 입력 필드를 추가합니다.
             if (students.length > 0) {
-                newEntry.querySelector(`textarea[id^="modal-students-"]`).value = students.join('\n');
+                students.forEach(student => {
+                    window.addStudentInput(newEntry.querySelector('.add-student-btn'), student);
+                });
+            } else {
+                // 학생 데이터가 없으면 빈 입력 필드를 하나 추가합니다.
+                window.addStudentInput(newEntry.querySelector('.add-student-btn'));
             }
         }
+
+        // 개별 학생 입력 필드를 추가하는 함수
+        window.addStudentInput = function(button, studentName = '') {
+            const exclusionEntry = button.closest('.exclusion-entry');
+            const studentsContainer = exclusionEntry.querySelector('.student-inputs-container');
+            const studentInputGroup = document.createElement('div');
+            studentInputGroup.classList.add('student-input-group');
+            studentInputGroup.innerHTML = `
+                <input type="text" class="student-name-input" placeholder="학번 이름 (예: 1206 김상윤)" value="${studentName}">
+                <button type="button" class="remove-student-input-btn" onclick="window.removeStudentInput(this)">-</button>
+            `;
+            studentsContainer.appendChild(studentInputGroup);
+        };
+
+        // 개별 학생 입력 필드를 제거하는 함수
+        window.removeStudentInput = function(button) {
+            button.closest('.student-input-group').remove();
+        };
 
         window.removeExclusionEntry = function(button) { // 전역 함수로 노출
             console.log("[Modal] Removing exclusion entry form.");
@@ -601,11 +600,16 @@
             const docIdsPresentInModal = new Set(); // 모달에 현재 존재하는 기존 문서 ID를 추적
 
             entriesInModal.forEach(entryElement => {
-                const mealTypeSelect = entryElement.querySelector('select');
+                const mealTypeSelect = entryElement.querySelector('select[id^="modal-meal-type-"]');
                 const mealType = mealTypeSelect.value;
-                const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
-                const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
-                const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
+                const reasonSelect = entryElement.querySelector('select[id^="modal-reason-"]');
+                const reason = reasonSelect.value;
+                
+                // 개별 학생 입력 필드에서 학생 이름들을 수집
+                const students = Array.from(entryElement.querySelectorAll('.student-name-input'))
+                                     .map(input => input.value.trim())
+                                     .filter(name => name !== '');
+
                 const docId = entryElement.dataset.docId; // data-doc-id 속성에서 docId 가져오기
 
                 if (!mealType) {
@@ -620,7 +624,7 @@
                 }
                 if (!reason) {
                     isValid = false;
-                    showCustomAlert('모든 제외 항목의 이유를 입력해주세요.');
+                    showCustomAlert('모든 제외 항목의 이유를 선택해주세요.'); // 이유도 선택하도록 변경
                     return;
                 }
 
@@ -744,11 +748,11 @@
                     const categoryHeader = document.createElement('h4');
                     categoryHeader.textContent = category.label;
 
-                    // "수정하기" 버튼은 이제 openExclusionModal을 호출하여 모든 신청을 관리하도록 합니다.
+                    // "수정하기" 버튼은 이제 openExclusionModalForEdit을 호출하여 모든 신청을 관리하도록 합니다.
                     const editButton = document.createElement('button');
                     editButton.classList.add('edit-summary-btn');
                     editButton.textContent = '수정하기';
-                    editButton.onclick = () => window.openExclusionModal(); // 모든 신청을 관리하는 통합 모달 호출
+                    editButton.onclick = () => window.openExclusionModalForEdit(); // 기존 신청을 관리하는 통합 모달 호출
                     categoryHeader.appendChild(editButton);
 
                     categoryDiv.appendChild(categoryHeader);
@@ -1591,6 +1595,57 @@
         .admin-section .btn-print:hover {
             background: #0056b3;
         }
+
+        /* Student Input Specific Styles */
+        .student-inputs-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .student-input-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .student-input-group input[type="text"] {
+            flex-grow: 1;
+            margin-bottom: 0; /* Override default margin-bottom */
+        }
+
+        .remove-student-input-btn {
+            background: #ff6347; /* Tomato color for remove */
+            color: white;
+            border: none;
+            padding: 6px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .remove-student-input-btn:hover {
+            background: #e5533d;
+        }
+
+        .add-student-btn {
+            background: #20b2aa; /* Light Sea Green for add student */
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-top: 5px;
+            display: block;
+            width: fit-content;
+        }
+
+        .add-student-btn:hover {
+            background: #1a9c94;
+        }
     </style>
 </head>
 
@@ -1824,7 +1879,7 @@
                     </ul>
                     <p>마감 시간 이후에는 신청하거나 수정할 수 없습니다.</p>
                 </div>
-                <button class="btn" id="reservation-button" onclick="window.openExclusionModal()">새로운 식사 제외 신청</button>
+                <button class="btn" id="reservation-button" onclick="window.openExclusionModalForNew()">새로운 식사 제외 신청</button>
             </div>
 
             <div class="reservation-card" id="exclusion-summary-card">
@@ -1867,7 +1922,7 @@
     <div id="exclusionModal" class="modal">
         <div class="modal-content">
             <span class="close-button" onclick="window.closeExclusionModal()">&times;</span>
-            <h3 id="modal-title">식사 제외 신청</h3>
+            <h3 id="modal-title">새로운 식사 제외 신청</h3>
 
             <div id="exclusion-entries-container">
                 <!-- Exclusion entry forms will be added here -->
