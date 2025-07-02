@@ -405,10 +405,10 @@
             }
         }
 
-        let currentModalMode = 'add';
-        let currentMealTypeBeingEdited = null;
+        // `currentModalMode`와 `currentMealTypeBeingEdited`는 이제 필요 없습니다.
+        // 모달은 항상 사용자의 내일 모든 제외 신청을 관리합니다.
 
-        window.openExclusionModal = function() { // 전역 함수로 노출
+        window.openExclusionModal = async function() { // 전역 함수로 노출
             console.log("[Modal] Attempting to open exclusion modal.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
@@ -417,64 +417,50 @@
                 return;
             }
 
-            currentModalMode = 'add';
             document.getElementById('modal-title').textContent = '식사 제외 신청';
             const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = '';
-            window.addExclusionEntry(); // window.addExclusionEntry로 변경
-            document.getElementById('exclusionModal').style.display = 'flex';
-            console.log("[Modal] Exclusion modal opened in ADD mode.");
-        }
-
-        window.openExclusionModalForEdit = async function(mealTypeToEdit) { // 전역 함수로 노출
-            console.log(`[Modal] Attempting to open exclusion modal for EDIT: ${mealTypeToEdit}`);
-            const reservationButton = document.getElementById('reservation-button');
-            if (reservationButton.classList.contains('disabled')) {
-                showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
-                console.log("[Modal] Cannot open for edit: Reservation button is disabled.");
-                return;
-            }
-
-            currentModalMode = 'edit';
-            currentMealTypeBeingEdited = mealTypeToEdit;
-            document.getElementById('modal-title').textContent = `${getMealTypeName(mealTypeToEdit)} 식사 제외 수정`;
-
-            const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = '';
+            container.innerHTML = ''; // 기존 항목 모두 비우기
 
             if (!currentUserId || !exclusionsCollection) {
                 showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
-                console.error("[Modal] Data not ready for edit: currentUserId or exclusionsCollection missing.");
+                console.error("[Modal] Data not ready: currentUserId or exclusionsCollection missing.");
                 return;
             }
 
             const tomorrowDate = getTomorrowDateString();
             try {
+                // 현재 사용자의 내일 제외 신청 내역 모두 불러오기
                 const q = query(exclusionsCollection,
                     where("date", "==", tomorrowDate),
-                    where("userId", "==", currentUserId),
-                    where("mealType", "==", mealTypeToEdit)
+                    where("userId", "==", currentUserId)
                 );
                 const querySnapshot = await getDocs(q);
 
                 if (!querySnapshot.empty) {
                     querySnapshot.forEach(doc => {
                         const data = doc.data();
-                        window.addExclusionEntry(data.mealType, data.reason, data.students); // window.addExclusionEntry로 변경
+                        window.addExclusionEntry(data.mealType, data.reason, data.students);
                     });
-                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions for edit.`);
+                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions.`);
                 } else {
-                    window.addExclusionEntry(mealTypeToEdit); // window.addExclusionEntry로 변경
-                    console.log(`[Modal] No existing exclusions for ${mealTypeToEdit}, adding empty entry.`);
+                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가
+                    console.log("[Modal] No existing exclusions, adding empty entry.");
                 }
             } catch (e) {
-                console.error("Error loading exclusions for edit:", e);
+                console.error("Error loading exclusions for modal:", e);
                 showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
             }
 
             document.getElementById('exclusionModal').style.display = 'flex';
-            console.log("[Modal] Exclusion modal opened in EDIT mode.");
+            console.log("[Modal] Exclusion modal opened.");
         }
+
+        // "수정하기" 버튼은 이제 단순히 `openExclusionModal`을 호출합니다.
+        window.openExclusionModalForEdit = function(mealTypeToEdit) {
+            console.log(`[Modal] Edit button clicked for ${mealTypeToEdit}. Opening unified exclusion modal.`);
+            window.openExclusionModal(); // 모든 내역을 불러오는 통합 모달 함수 호출
+        };
+
 
         window.closeExclusionModal = function() { // 전역 함수로 노출
             console.log("[Modal] Closing exclusion modal.");
@@ -578,7 +564,7 @@
             try {
                 const tomorrowDate = getTomorrowDateString();
 
-                // 현재 사용자의 내일 제외 신청을 모두 삭제
+                // 현재 사용자의 내일 제외 신청을 모두 삭제 (모달의 내용으로 완전히 대체하기 위함)
                 const existingExclusionsQuery = query(exclusionsCollection,
                     where("date", "==", tomorrowDate),
                     where("userId", "==", currentUserId)
@@ -589,9 +575,9 @@
                     deletePromises.push(deleteDoc(doc.ref));
                 });
                 await Promise.all(deletePromises);
-                console.log(`[Modal] Deleted ${deletePromises.length} existing exclusions.`);
+                console.log(`[Modal] Deleted ${deletePromises.length} existing exclusions for current user.`);
 
-                // 새로운 또는 수정된 제외 신청을 추가
+                // 모달에 있는 새로운/수정된 제외 신청을 추가
                 const addPromises = [];
                 newOrEditedExclusions.forEach(exclusion => {
                     addPromises.push(addDoc(exclusionsCollection, {
@@ -716,7 +702,7 @@
 
         // --- 관리자 탭 ---
 
-        const ADMIN_PASSWORD = "admin"; // 실제 서비스에서는 더 안전한 방법 사용
+        const ADMIN_PASSWORD = "090616"; // 비밀번호를 "090616"으로 수정
 
         window.adminLogin = function() { // 전역 함수로 노출
             const passwordInput = document.getElementById('admin-password');
