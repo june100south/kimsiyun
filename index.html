@@ -11,7 +11,7 @@
         // Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs, doc, getDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Canvas 환경에서 제공되는 전역 변수들
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -326,6 +326,11 @@
                 const stars = ratingDiv.querySelectorAll('.star');
                 const ratingValueSpan = ratingDiv.querySelector('.rating-value');
 
+                // 초기 로드 시 별점을 0으로 설정
+                updateStarDisplay(stars, 0); // 모든 별을 비움
+                ratingValueSpan.textContent = "0.0"; // 값을 0.0으로 설정
+
+                // 이후 실제 평균을 불러와 업데이트 (onSnapshot에 의해 자동으로도 업데이트 됨)
                 updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
 
                 stars.forEach((star) => {
@@ -371,37 +376,6 @@
             updateMenuItemRatingDisplay(mealTime, menuName, stars, ratingValueSpan);
         }
 
-        // --- 내 평가 초기화 함수 ---
-        // 사용자 요청에 따라 이 함수는 더 이상 사용되지 않으므로 제거합니다.
-        /*
-        window.resetMyRating = async function(mealTime, menuName) {
-            if (!currentUserId || !ratingsCollection) {
-                showCustomAlert("사용자 인증 중이거나 데이터베이스가 준비되지 않았습니다. 잠시 후 다시 시도해주세요.");
-                return;
-            }
-
-            const ratingDocId = `${currentUserId}_${mealTime}_${menuName}`;
-            const docRef = doc(ratingsCollection, ratingDocId);
-
-            try {
-                // 문서가 존재하는지 확인 후 삭제
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    await deleteDoc(docRef);
-                    showCustomAlert(`${getMealTypeName(mealTime)} - ${menuName}에 대한 내 평가가 초기화되었습니다.`);
-                    console.log(`User ${currentUserId}'s rating for ${mealTime} - ${menuName} reset.`);
-                } else {
-                    showCustomAlert('초기화할 평가 내역이 없습니다.');
-                    console.log(`No rating found for ${mealTime} - ${menuName} by user ${currentUserId}.`);
-                }
-            } catch (e) {
-                console.error("Error resetting rating: ", e);
-                showCustomAlert("평가 초기화 중 오류가 발생했습니다.");
-            }
-        };
-        */
-
-
         // --- 식사 예약 탭 (제외 신청 기능) ---
 
         const mealDeadlines = {
@@ -446,9 +420,6 @@
                 console.log("[Reservation Button] Enabled.");
             }
         }
-
-        // `currentModalMode`와 `currentMealTypeBeingEdited`는 이제 필요 없습니다.
-        // 모달은 항상 사용자의 내일 모든 제외 신청을 관리합니다.
 
         window.openExclusionModal = async function() { // 전역 함수로 노출
             console.log("[Modal] Attempting to open exclusion modal for NEW entry.");
@@ -504,11 +475,12 @@
                     querySnapshot.forEach(doc => {
                         const data = doc.data();
                         console.log("[Modal Load for Edit] Found existing exclusion:", data);
-                        window.addExclusionEntry(data.mealType, data.reason, data.students);
+                        // doc.id를 addExclusionEntry 함수에 전달하여 기존 문서임을 표시
+                        window.addExclusionEntry(data.mealType, data.reason, data.students, doc.id);
                     });
                     console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions for edit.`);
                 } else {
-                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가 (수정할 내용이 없으므로 새롭게 시작)
+                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가
                     console.log("[Modal] No existing exclusions for edit, adding empty entry.");
                 }
             } catch (e) {
@@ -526,12 +498,16 @@
             document.getElementById('exclusionModal').style.display = 'none';
         }
 
-        window.addExclusionEntry = function(mealType = '', reason = '', students = []) { // 전역 함수로 노출
+        // docId 매개변수를 추가하여 기존 문서인지 여부를 추적
+        window.addExclusionEntry = function(mealType = '', reason = '', students = [], docId = '') { // 전역 함수로 노출
             console.log("[Modal] Adding new exclusion entry form.");
             const container = document.getElementById('exclusion-entries-container');
             const entryCount = container.querySelectorAll('.exclusion-entry').length;
             const newEntry = document.createElement('div');
             newEntry.classList.add('exclusion-entry');
+            if (docId) { // docId가 있으면 data-doc-id 속성으로 저장
+                newEntry.dataset.docId = docId;
+            }
             newEntry.innerHTML = `
                 <button type="button" class="remove-entry-btn" onclick="window.removeExclusionEntry(this)">&times;</button>
                 <div class="form-group">
@@ -583,17 +559,18 @@
             const entriesInModal = container.querySelectorAll('.exclusion-entry');
             const tomorrowDate = getTomorrowDateString();
             let isValid = true;
-            const upsertPromises = [];
-            const mealTypesInModal = new Set(); // 현재 모달 제출에 있는 식사 유형 추적
 
-            // 1단계: 모달에서 데이터를 수집하고 Upsert를 준비합니다.
-            const modalDataByMealType = {};
+            const entriesToUpdate = []; // { docId, data }
+            const entriesToAdd = [];    // { data }
+            const docIdsPresentInModal = new Set(); // 모달에 현재 존재하는 기존 문서 ID를 추적
+
             entriesInModal.forEach(entryElement => {
                 const mealTypeSelect = entryElement.querySelector('select');
                 const mealType = mealTypeSelect.value;
                 const reason = entryElement.querySelector('textarea[id^="modal-reason-"]').value.trim();
                 const studentsText = entryElement.querySelector('textarea[id^="modal-students-"]').value.trim();
                 const students = studentsText.split('\n').map(s => s.trim()).filter(s => s !== '');
+                const docId = entryElement.dataset.docId; // data-doc-id 속성에서 docId 가져오기
 
                 if (!mealType) {
                     isValid = false;
@@ -611,19 +588,21 @@
                     return;
                 }
 
-                // 동일한 식사 유형에 대한 여러 항목이 모달에 있는 경우, 통합합니다.
-                if (modalDataByMealType[mealType]) {
-                    // 학생 목록을 통합합니다 (중복 방지).
-                    modalDataByMealType[mealType].students = [...new Set([...modalDataByMealType[mealType].students, ...students])];
-                    // 이유를 통합합니다 (간단한 문자열 연결).
-                    // 기존 이유에 새로운 이유가 포함되어 있지 않으면 추가합니다.
-                    if (reason && !modalDataByMealType[mealType].reason.includes(reason)) {
-                        modalDataByMealType[mealType].reason += `; ${reason}`;
-                    }
+                const entryData = {
+                    userId: currentUserId,
+                    mealType: mealType,
+                    reason: reason,
+                    students: students,
+                    date: tomorrowDate,
+                    timestamp: new Date()
+                };
+
+                if (docId) {
+                    entriesToUpdate.push({ docId, data: entryData });
+                    docIdsPresentInModal.add(docId); // 모달에 존재하는 기존 문서 ID 추가
                 } else {
-                    modalDataByMealType[mealType] = { mealType, reason, students };
+                    entriesToAdd.push(entryData);
                 }
-                mealTypesInModal.add(mealType); // 제출되는 고유 식사 유형을 추적합니다.
             });
 
             if (!isValid) {
@@ -632,45 +611,40 @@
             }
 
             try {
-                // 2단계: 모달 콘텐츠를 기반으로 Upsert (업데이트 또는 추가) 항목을 수행합니다.
-                for (const mealType in modalDataByMealType) {
-                    const dataToSave = modalDataByMealType[mealType];
-                    const q = query(exclusionsCollection,
-                        where("date", "==", tomorrowDate),
-                        where("userId", "==", currentUserId),
-                        where("mealType", "==", mealType)
-                    );
-                    const existingSnapshot = await getDocs(q);
+                const batch = writeBatch(db); // Firestore Batch 사용
 
-                    if (!existingSnapshot.empty) {
-                        // 기존 문서를 업데이트합니다.
-                        existingSnapshot.forEach(docToUpdate => {
-                            console.log(`[Modal Save] Updating existing exclusion for ${mealType}:`, dataToSave);
-                            upsertPromises.push(updateDoc(docToUpdate.ref, {
-                                reason: dataToSave.reason,
-                                students: dataToSave.students,
-                                timestamp: new Date()
-                            }));
-                        });
-                    } else {
-                        // 새 문서를 추가합니다.
-                        console.log(`[Modal Save] Adding new exclusion for ${mealType}:`, dataToSave);
-                        upsertPromises.push(addDoc(exclusionsCollection, {
-                            userId: currentUserId,
-                            mealType: dataToSave.mealType,
-                            reason: dataToSave.reason,
-                            students: dataToSave.students,
-                            date: tomorrowDate,
-                            timestamp: new Date()
-                        }));
+                // 1. 모달에서 제거된 기존 항목 삭제
+                const existingExclusionsQuery = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId)
+                );
+                const existingExclusionsSnapshot = await getDocs(existingExclusionsQuery);
+
+                existingExclusionsSnapshot.forEach(docSnap => {
+                    if (!docIdsPresentInModal.has(docSnap.id)) {
+                        // 기존 문서가 모달에 없으면 삭제
+                        batch.delete(docSnap.ref);
+                        console.log(`[Modal Save] Deleting removed exclusion: ${docSnap.id}`);
                     }
-                }
+                });
 
-                // 3단계: 모달에 없는 기존 Firestore 문서를 삭제하는 로직은 사용자 요청에 따라 제거됩니다.
-                // 이전 대화에서 이 로직을 제거했으므로, 다시 추가하지 않습니다.
-                await Promise.all(upsertPromises); // Upsert만 수행
+                // 2. 기존 항목 업데이트
+                entriesToUpdate.forEach(entry => {
+                    const docRef = doc(exclusionsCollection, entry.docId);
+                    batch.set(docRef, entry.data, { merge: true }); // set with merge를 사용하여 업데이트
+                    console.log(`[Modal Save] Updating existing exclusion: ${entry.docId}`, entry.data);
+                });
 
-                console.log(`[Modal] Save operation completed. Upserted ${upsertPromises.length} entries.`);
+                // 3. 새 항목 추가
+                entriesToAdd.forEach(entry => {
+                    const newDocRef = doc(exclusionsCollection); // Firestore가 ID 자동 생성
+                    batch.set(newDocRef, entry); // set을 사용하여 새 문서 추가
+                    console.log(`[Modal Save] Adding new exclusion:`, entry);
+                });
+
+                await batch.commit(); // 모든 배치 작업 커밋
+
+                console.log(`[Modal] Save operation completed. Updated ${entriesToUpdate.length}, Added ${entriesToAdd.length}, Deleted ${existingExclusionsSnapshot.size - docIdsPresentInModal.size} entries.`);
 
                 window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
@@ -746,6 +720,7 @@
                     const entriesForCategory = groupedExclusions[category.key];
                     if (entriesForCategory.length > 0) {
                         hasAnyExclusion = true;
+                        // 각 제외 신청 항목을 별도의 div로 표시
                         entriesForCategory.forEach(entry => {
                             const summaryItem = document.createElement('div');
                             summaryItem.classList.add('exclusion-summary-item');
@@ -1153,26 +1128,6 @@
             color: #666;
             min-width: 30px;
         }
-
-        /* "내 평가 초기화" 버튼 제거로 인해 관련 CSS도 제거합니다. */
-        /*
-        .reset-rating-btn {
-            background: #f44336;
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 10px;
-            margin-top: 5px;
-            transition: background 0.3s;
-        }
-
-        .reset-rating-btn:hover {
-            background: #da190b;
-        }
-        */
-
 
         .notification {
             background: #fff3cd;
@@ -1620,7 +1575,7 @@
         <div id="meals" class="tab-content active">
             <div class="meal-time-section">
                 <div class="time-header">
-                    <span>� 아침 급식</span>
+                    <span>🌅 아침 급식</span>
                 </div>
                 <div class="menu-content">
                     <div class="meal-header">
@@ -1629,7 +1584,6 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="네코맘마덮밥">네코맘마덮밥</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1643,7 +1597,6 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="비스킷">비스킷</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1657,7 +1610,6 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="삼치데리야끼구이">삼치데리야끼구이</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1671,7 +1623,6 @@
                     <div class="menu-item" data-meal-time="breakfast">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="시리얼&우유">시리얼&우유</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="breakfast">
                             <span class="star" data-value="1">★</span>
@@ -1696,7 +1647,6 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="목살필라프">목살필라프</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1710,7 +1660,6 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="차지키샐러드">차지키샐러드</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1724,7 +1673,6 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="장각치킨구이">장각치킨구이</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1738,7 +1686,6 @@
                     <div class="menu-item" data-meal-time="lunch">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="복숭아">복숭아</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="lunch">
                             <span class="star" data-value="1">★</span>
@@ -1763,7 +1710,6 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="구운주먹밥">구운주먹밥</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1777,7 +1723,6 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="해물찌개">해물찌개</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1791,7 +1736,6 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="돈파이">돈파이</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1805,7 +1749,6 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="쿨피스">쿨피스</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
@@ -1819,7 +1762,6 @@
                     <div class="menu-item" data-meal-time="dinner">
                         <div class="menu-info">
                             <div class="menu-name" data-menu-name="방울토마토">방울토마토</div>
-                            <!-- "내 평가 초기화" 버튼 제거 -->
                         </div>
                         <div class="star-rating" data-meal-time="dinner">
                             <span class="star" data-value="1">★</span>
