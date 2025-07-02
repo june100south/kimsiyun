@@ -422,7 +422,7 @@
         }
 
         window.openExclusionModal = async function() { // 전역 함수로 노출
-            console.log("[Modal] Attempting to open exclusion modal for NEW entry.");
+            console.log("[Modal] Attempting to open exclusion modal for NEW/EDIT entry.");
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -430,16 +430,52 @@
                 return;
             }
 
-            document.getElementById('modal-title').textContent = '새로운 식사 제외 신청';
+            document.getElementById('modal-title').textContent = '식사 제외 신청'; // 통합된 모달 제목
             const container = document.getElementById('exclusion-entries-container');
-            container.innerHTML = ''; // 항상 기존 항목 모두 비우고 새로운 항목 추가
-            window.addExclusionEntry(); // 항상 빈 항목 하나 추가
+            container.innerHTML = ''; // 항상 기존 항목 모두 비우기
+
+            if (!currentUserId || !exclusionsCollection) {
+                showCustomAlert("데이터를 불러올 수 없습니다. 다시 시도해주세요.");
+                console.error("[Modal] Data not ready: currentUserId or exclusionsCollection missing.");
+                return;
+            }
+
+            const tomorrowDate = getTomorrowDateString();
+            try {
+                // 현재 사용자의 내일 제외 신청 내역 모두 불러오기
+                const q = query(exclusionsCollection,
+                    where("date", "==", tomorrowDate),
+                    where("userId", "==", currentUserId)
+                );
+                console.log(`[Modal Load] Querying for all exclusions. Date: ${tomorrowDate}, UserID: ${currentUserId}`);
+                const querySnapshot = await getDocs(q);
+                console.log(`[Modal Load] Query snapshot empty: ${querySnapshot.empty}, Size: ${querySnapshot.size}`);
+
+
+                if (!querySnapshot.empty) {
+                    querySnapshot.forEach(doc => {
+                        const data = doc.data();
+                        console.log("[Modal Load] Found existing exclusion:", data);
+                        // doc.id를 addExclusionEntry 함수에 전달하여 기존 문서임을 표시
+                        window.addExclusionEntry(data.mealType, data.reason, data.students, doc.id);
+                    });
+                    console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions.`);
+                } else {
+                    window.addExclusionEntry(); // 기존 내역이 없으면 빈 항목 하나 추가
+                    console.log("[Modal] No existing exclusions, adding empty entry.");
+                }
+            } catch (e) {
+                console.error("Error loading exclusions for modal:", e);
+                showCustomAlert("기존 제외 신청을 불러오는 데 실패했습니다.");
+            }
 
             document.getElementById('exclusionModal').style.display = 'flex';
-            console.log("[Modal] Exclusion modal opened for new entry.");
+            console.log("[Modal] Exclusion modal opened.");
         }
 
         // "수정하기" 버튼은 이제 단순히 `openExclusionModal`을 호출합니다.
+        // 이 함수는 더 이상 필요 없으므로 제거합니다.
+        /*
         window.openExclusionModalForEdit = async function(mealTypeToEdit) {
             console.log(`[Modal] Edit button clicked for ${mealTypeToEdit}. Opening unified exclusion modal for EDIT.`);
             const reservationButton = document.getElementById('reservation-button');
@@ -491,6 +527,7 @@
             document.getElementById('exclusionModal').style.display = 'flex';
             console.log("[Modal] Exclusion modal opened for edit.");
         };
+        */
 
 
         window.closeExclusionModal = function() { // 전역 함수로 노출
@@ -560,8 +597,7 @@
             const tomorrowDate = getTomorrowDateString();
             let isValid = true;
 
-            const entriesToUpdate = []; // { docId, data }
-            const entriesToAdd = [];    // { data }
+            const entriesToProcess = []; // { docId, data } for updates and additions
             const docIdsPresentInModal = new Set(); // 모달에 현재 존재하는 기존 문서 ID를 추적
 
             entriesInModal.forEach(entryElement => {
@@ -597,11 +633,9 @@
                     timestamp: new Date()
                 };
 
+                entriesToProcess.push({ docId, data: entryData });
                 if (docId) {
-                    entriesToUpdate.push({ docId, data: entryData });
                     docIdsPresentInModal.add(docId); // 모달에 존재하는 기존 문서 ID 추가
-                } else {
-                    entriesToAdd.push(entryData);
                 }
             });
 
@@ -613,7 +647,7 @@
             try {
                 const batch = writeBatch(db); // Firestore Batch 사용
 
-                // 1. 모달에서 제거된 기존 항목 삭제
+                // 1. 모달에 없는 기존 항목 삭제
                 const existingExclusionsQuery = query(exclusionsCollection,
                     where("date", "==", tomorrowDate),
                     where("userId", "==", currentUserId)
@@ -628,23 +662,24 @@
                     }
                 });
 
-                // 2. 기존 항목 업데이트
-                entriesToUpdate.forEach(entry => {
-                    const docRef = doc(exclusionsCollection, entry.docId);
-                    batch.set(docRef, entry.data, { merge: true }); // set with merge를 사용하여 업데이트
-                    console.log(`[Modal Save] Updating existing exclusion: ${entry.docId}`, entry.data);
-                });
-
-                // 3. 새 항목 추가
-                entriesToAdd.forEach(entry => {
-                    const newDocRef = doc(exclusionsCollection); // Firestore가 ID 자동 생성
-                    batch.set(newDocRef, entry); // set을 사용하여 새 문서 추가
-                    console.log(`[Modal Save] Adding new exclusion:`, entry);
+                // 2. 모달에 있는 항목 추가 또는 업데이트
+                entriesToProcess.forEach(entry => {
+                    if (entry.docId) {
+                        // 기존 문서 업데이트
+                        const docRef = doc(exclusionsCollection, entry.docId);
+                        batch.set(docRef, entry.data, { merge: true }); // set with merge를 사용하여 업데이트
+                        console.log(`[Modal Save] Updating existing exclusion: ${entry.docId}`, entry.data);
+                    } else {
+                        // 새 문서 추가
+                        const newDocRef = doc(exclusionsCollection); // Firestore가 ID 자동 생성
+                        batch.set(newDocRef, entry.data); // set을 사용하여 새 문서 추가
+                        console.log(`[Modal Save] Adding new exclusion:`, entry.data);
+                    }
                 });
 
                 await batch.commit(); // 모든 배치 작업 커밋
 
-                console.log(`[Modal] Save operation completed. Updated ${entriesToUpdate.length}, Added ${entriesToAdd.length}, Deleted ${existingExclusionsSnapshot.size - docIdsPresentInModal.size} entries.`);
+                console.log(`[Modal] Save operation completed. Processed ${entriesToProcess.length} entries, Deleted ${existingExclusionsSnapshot.size - docIdsPresentInModal.size} entries.`);
 
                 window.closeExclusionModal();
                 showCustomAlert('식사 제외 신청이 저장되었습니다.');
@@ -709,10 +744,11 @@
                     const categoryHeader = document.createElement('h4');
                     categoryHeader.textContent = category.label;
 
+                    // "수정하기" 버튼은 이제 openExclusionModal을 호출하여 모든 신청을 관리하도록 합니다.
                     const editButton = document.createElement('button');
                     editButton.classList.add('edit-summary-btn');
                     editButton.textContent = '수정하기';
-                    editButton.onclick = () => window.openExclusionModalForEdit(category.key); // 전역 함수 호출
+                    editButton.onclick = () => window.openExclusionModal(); // 모든 신청을 관리하는 통합 모달 호출
                     categoryHeader.appendChild(editButton);
 
                     categoryDiv.appendChild(categoryHeader);
