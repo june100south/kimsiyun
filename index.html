@@ -421,7 +421,7 @@
         // 모달은 항상 사용자의 내일 모든 제외 신청을 관리합니다.
 
         window.openExclusionModal = async function() { // 전역 함수로 노출
-            console.log("[Modal] Attempting to open exclusion modal.");
+            console.log("[Modal] Attempting to open exclusion modal. Current User ID:", currentUserId);
             const reservationButton = document.getElementById('reservation-button');
             if (reservationButton.classList.contains('disabled')) {
                 showCustomAlert('식사 제외 신청 마감 시간이 지났습니다.');
@@ -446,11 +446,15 @@
                     where("date", "==", tomorrowDate),
                     where("userId", "==", currentUserId)
                 );
+                console.log(`[Modal Load] Querying for exclusions. Date: ${tomorrowDate}, UserID: ${currentUserId}`);
                 const querySnapshot = await getDocs(q);
+                console.log(`[Modal Load] Query snapshot empty: ${querySnapshot.empty}, Size: ${querySnapshot.size}`);
+
 
                 if (!querySnapshot.empty) {
                     querySnapshot.forEach(doc => {
                         const data = doc.data();
+                        console.log("[Modal Load] Found existing exclusion:", data);
                         window.addExclusionEntry(data.mealType, data.reason, data.students);
                     });
                     console.log(`[Modal] Loaded ${querySnapshot.size} existing exclusions.`);
@@ -588,6 +592,7 @@
                 });
                 await Promise.all(deletePromises);
                 console.log(`[Modal] Deleted ${deletePromises.length} existing exclusions for current user.`);
+                console.log("[Modal Save] Exclusions to be saved:", newOrEditedExclusions); // 추가된 로그
 
                 // 모달에 있는 새로운/수정된 제외 신청을 추가
                 const addPromises = [];
